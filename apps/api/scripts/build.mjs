@@ -102,6 +102,15 @@ patchedModalAi = replaceRequired(
   "character requirement Modal payload",
 );
 
+patchedModalAi = replaceRequired(
+  patchedModalAi,
+  `      headers: modalHeaders(),
+      body: JSON.stringify({`,
+  `      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({`,
+  "use public LTX endpoint without stale Modal workspace credentials",
+);
+
 const patchedDirectorAgent = patchDirectorAgentNormalization(
   originalDirectorAgent,
   replaceRequired,
