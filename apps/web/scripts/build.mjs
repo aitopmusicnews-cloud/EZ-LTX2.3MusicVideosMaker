@@ -58,6 +58,32 @@ function replaceRequired(source, from, to, label) {
   return source.replace(normalizedFrom, normalizedTo);
 }
 
+function replacePreviewRequired(source, from, to, label) {
+  try {
+    return replaceRequired(source, from, to, label);
+  } catch (error) {
+    if (label === "disable section approval until preview exists") {
+      const oldCondition = "disabled={!!busy || approvedSectionKeySet.has(activeApprovalSection.key)}";
+      const newCondition = "disabled={!!busy || approvedSectionKeySet.has(activeApprovalSection.key) || !session.sectionPreviewUrls[activeApprovalSection.key]}";
+      if (source.includes(newCondition)) return source;
+      if (source.includes(oldCondition)) return source.replace(oldCondition, newCondition);
+    }
+
+    if (label === "song preview locked message") {
+      const oldTitle = "<h3 style={sectionTitleStyle}>4. Song section approvals · Locked</h3>";
+      const newTitle = "<h3 style={sectionTitleStyle}>4. Song-section previews · Locked</h3>";
+      const oldMessage = "<div style={blockingStyle}>Approve the character bible before reviewing the first analyzed song section.</div>";
+      const newMessage = "<div style={blockingStyle}>Approve the LTX visual-style preview before reviewing song sections.</div>";
+      let next = source;
+      if (next.includes(oldTitle)) next = next.replace(oldTitle, newTitle);
+      if (next.includes(oldMessage)) next = next.replace(oldMessage, newMessage);
+      if (next !== source || (next.includes(newTitle) && next.includes(newMessage))) return next;
+    }
+
+    throw error;
+  }
+}
+
 const originalSidebar = await readFile(sidebarPath, "utf8");
 const originalDirector = await readFile(directorPath, "utf8");
 const originalAgent = await readFile(agentPath, "utf8");
@@ -192,7 +218,7 @@ const stagedAgent = patchDirectorSectionApprovals(
   replaceRequired,
 );
 const patchedAgent = repairDirectorPreviewPatch(
-  patchDirectorPreviewApprovals(stagedAgent, replaceRequired),
+  patchDirectorPreviewApprovals(stagedAgent, replacePreviewRequired),
   replaceRequired,
 );
 const patchedReferenceChat = patchDirectorReferenceChat(originalReferenceChat, replaceRequired);
