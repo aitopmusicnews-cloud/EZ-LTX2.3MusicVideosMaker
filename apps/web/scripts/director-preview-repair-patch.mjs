@@ -1,39 +1,33 @@
 export function repairDirectorPreviewPatch(source, replaceRequired) {
   let patched = source;
 
-  patched = replaceRequired(
-    patched,
+  const repairOptional = (from, to) => {
+    if (patched.includes(from)) patched = patched.replace(from, to);
+  };
+
+  repairOptional(
     `  const updateCharacterBible = <K extends keyof CharacterBible,>  const updateCharacterBible = <K extends keyof CharacterBible,>(key: K, value: CharacterBible[K]) => {`,
     `  const updateCharacterBible = <K extends keyof CharacterBible,>(key: K, value: CharacterBible[K]) => {`,
-    "character editor function boundary",
   );
 
-  patched = replaceRequired(
-    patched,
+  repairOptional(
     `  const updateShot = (shotId: string, patch: Partial<LtxShotPlan>) => {  const updateShot = (shotId: string, patch: Partial<LtxShotPlan>) => {`,
     `  const updateShot = (shotId: string, patch: Partial<LtxShotPlan>) => {`,
-    "shot editor function boundary",
   );
 
-  patched = replaceRequired(
-    patched,
+  repairOptional(
     `  const resolveReferenceUrl = (referenceId: string | null): string => {  const resolveReferenceUrl = (referenceId: string | null): string => {`,
     `  const resolveReferenceUrl = (referenceId: string | null): string => {`,
-    "reference resolver function boundary",
   );
 
-  patched = replaceRequired(
-    patched,
+  repairOptional(
     `  const approveActiveSongSection = () => {  const approveActiveSongSection = () => {`,
     `  const approveActiveSongSection = () => {`,
-    "section approval function boundary",
   );
 
-  patched = replaceRequired(
-    patched,
+  repairOptional(
     `  const validateAndApplyPlan = (): boolean => {  const validateAndApplyPlan = (): boolean => {`,
     `  const validateAndApplyPlan = (): boolean => {`,
-    "timeline validation function boundary",
   );
 
   patched = replaceRequired(
