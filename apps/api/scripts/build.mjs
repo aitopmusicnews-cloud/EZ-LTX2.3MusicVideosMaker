@@ -77,7 +77,10 @@ let patchedModalAi = replaceRequired(
   const initImageUrl = req.promptImage ?? req.imageUrl;
   const jobId = \`job_\${Date.now()}_\${Math.random().toString(36).slice(2, 9)}\`;`,
   `  const duration = Math.min(5, Math.max(1, Number(req.duration ?? 5)));
-  const initImageUrl = req.promptImage ?? req.imageUrl;
+  const rawInitImageUrl = req.promptImage ?? req.imageUrl;
+  const initImageUrl = rawInitImageUrl?.startsWith("/")
+    ? new URL(rawInitImageUrl, \`\${callbackBaseUrl.replace(/\\\/$/, "")}/\`).toString()
+    : rawInitImageUrl;
   const characterRequired = Boolean(
     (req as ImageToVideoRequest & { characterRequired?: boolean; requiresCharacter?: boolean }).characterRequired ??
     (req as ImageToVideoRequest & { characterRequired?: boolean; requiresCharacter?: boolean }).requiresCharacter
@@ -86,7 +89,7 @@ let patchedModalAi = replaceRequired(
     throw new Error("Character conditioning is required. LTX generation was not started because no character image was attached.");
   }
   const jobId = \`job_\${Date.now()}_\${Math.random().toString(36).slice(2, 9)}\`;`,
-  "strict character condition validation",
+  "strict character condition validation and public preview URL",
 );
 
 patchedModalAi = replaceRequired(
