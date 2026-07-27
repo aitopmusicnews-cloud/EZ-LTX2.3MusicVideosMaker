@@ -12,56 +12,53 @@ function run(command, args) {
 
 await run("tsc", ["-p", "tsconfig.json"]);
 
-// Gemini 3.6 Flash still accepts the legacy generateContent responseSchema path,
-// but that path expects Google's OpenAPI Schema shape rather than raw JSON Schema.
-// Keep TypeScript source as the source of truth and normalize only the compiled
-// Director request so Render sends nullable fields and enum types correctly.
+// Gemini 3.6 Flash generateContent uses responseFormat for structured output.
+// In the raw REST proto, TextResponseFormat.mimeType is an enum, so JSON must
+// be sent as APPLICATION_JSON rather than the literal string application/json.
 const directorDistPath = resolve(process.cwd(), "dist/director_agent.js");
 let directorDist = await readFile(directorDistPath, "utf8");
 
-const callGeminiAnchor = "async function callGemini(parts, model) {";
-const legacySchemaHelper = `function toLegacyResponseSchema(value) {
-    if (Array.isArray(value))
-        return value.map((item) => toLegacyResponseSchema(item));
-    if (!value || typeof value !== "object")
-        return value;
-    const result = {};
-    for (const [key, child] of Object.entries(value)) {
-        if (key === "additionalProperties")
-            continue;
-        if (key === "type" && Array.isArray(child)) {
-            const nonNullType = child.find((item) => item !== "null");
-            if (nonNullType)
-                result.type = String(nonNullType).toUpperCase();
-            if (child.includes("null"))
-                result.nullable = true;
-            continue;
-        }
-        if (key === "type" && typeof child === "string") {
-            result.type = child.toUpperCase();
-            continue;
-        }
-        result[key] = toLegacyResponseSchema(child);
-    }
-    return result;
-}
+const legacyConfig = `responseMimeType: "application/json",
+                responseJsonSchema: RESPONSE_SCHEMA,`;
+const currentConfig = `responseFormat: {
+                    text: {
+                        mimeType: "APPLICATION_JSON",
+                        schema: RESPONSE_SCHEMA,
+                    },
+                },`;
 
-`;
-
-if (!directorDist.includes("function toLegacyResponseSchema(value)")) {
-  if (!directorDist.includes(callGeminiAnchor)) {
-    throw new Error("Could not find the compiled Gemini Director call anchor.");
-  }
-  directorDist = directorDist.replace(callGeminiAnchor, legacySchemaHelper + callGeminiAnchor);
-}
-
-const jsonSchemaConfig = "responseJsonSchema: RESPONSE_SCHEMA,";
-const legacySchemaConfig = "responseSchema: toLegacyResponseSchema(RESPONSE_SCHEMA),";
-if (directorDist.includes(jsonSchemaConfig)) {
-  directorDist = directorDist.replace(jsonSchemaConfig, legacySchemaConfig);
-} else if (!directorDist.includes(legacySchemaConfig)) {
+if (directorDist.includes(legacyConfig)) {
+  directorDist = directorDist.replace(legacyConfig, currentConfig);
+} else if (!directorDist.includes('mimeType: "APPLICATION_JSON"')) {
   throw new Error("Could not find the compiled Gemini Director structured-output configuration.");
 }
 
+// Preserve Google's error details. The API often places the useful field-level
+// reason in error.details while error.message is only "Request contains an invalid argument.".
+const oldErrorParser = `let message = text;
+        try {
+            message = JSON.parse(text)?.error?.message ?? text;
+        }
+        catch {
+            // Keep the original response text.
+        }`;
+const detailedErrorParser = `let message = text;
+        try {
+            const parsedError = JSON.parse(text)?.error;
+            if (parsedError) {
+                const details = Array.isArray(parsedError.details) && parsedError.details.length > 0
+                    ? \` Details: \${JSON.stringify(parsedError.details)}\`
+                    : "";
+                message = \`\${parsedError.message ?? text}\${details}\`;
+            }
+        }
+        catch {
+            // Keep the original response text.
+        }`;
+
+if (directorDist.includes(oldErrorParser)) {
+  directorDist = directorDist.replace(oldErrorParser, detailedErrorParser);
+}
+
 await writeFile(directorDistPath, directorDist, "utf8");
-console.log("[api build] Compiled API and normalized Gemini Director structured output for generateContent.");
+console.log("[api build] Compiled API with Gemini 3.6 responseFormat structured output.");
