@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { patchDirectorStatus } from "./director-status-patch.mjs";
 import { patchDirectorEditing } from "./director-edit-patch.mjs";
 import { patchDirectorAgentRuntime, patchDirectorReferenceChat } from "./director-agent-runtime-patch.mjs";
+import { patchOptionalCharacterConditioning } from "./optional-character-conditioning.patch.mjs";
 
 const webRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const sidebarPath = resolve(webRoot, "src/components/Sidebar.tsx");
@@ -63,11 +64,7 @@ if (patchedApi.includes(oldSliceAudio)) patchedApi = patchedApi.replace(oldSlice
 let patchedScheduler = originalScheduler;
 if (!patchedScheduler.includes("Character conditioning is required.")) patchedScheduler = patchDirectorAgentRuntime(patchedScheduler, replaceRequired);
 
-// The Director component is now maintained directly in source. Do not run the old
-// brittle text-replacement patch that searched for the Character Bible editor.
-// This is intentional: the previous build pipeline failed whenever formatting or
-// an earlier commit changed that exact source line.
-const patchedAgent = originalAgent;
+let patchedAgent = patchOptionalCharacterConditioning(originalAgent, replaceRequired);
 const patchedReferenceChat = patchDirectorReferenceChat(originalReferenceChat, replaceRequired);
 
 try {
@@ -82,7 +79,7 @@ try {
   await writeFile(schedulerPath, patchedScheduler, "utf8");
   await writeFile(agentPath, patchedAgent, "utf8");
   await writeFile(referenceChatPath, patchedReferenceChat, "utf8");
-  console.log("[web build] Enforced strict LTX agent conditioning and connected Reference Chat.");
+  console.log("[web build] Made character conditioning optional unless a shot requires it.");
   await run("tsc", ["--noEmit"]);
   await run("vite", ["build"]);
 } finally {
