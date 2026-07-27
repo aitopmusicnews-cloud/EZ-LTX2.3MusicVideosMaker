@@ -8,6 +8,7 @@ import { dirname, join, resolve } from "node:path";
 import { existsSync, statSync, appendFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { config } from "./config.js";
+import { createDirectorPlan } from "./director_agent.js";
 import { saveUpload, readAnalysis, writeAnalysisError, readAnalysisError, clearAnalysisError, CorruptAnalysisError } from "./storage.js";
 import { analyzeFromUrl } from "./audio.js";
 import { imageToVideo, animateLipSync, generateCharacterFrame, readJobFromDisk, writeJobToDisk, decodeTaskId } from "./modalAI.js";
@@ -44,6 +45,22 @@ app.setNotFoundHandler((req, reply) => { const urlLower = req.url.toLowerCase();
 app.addHook("preHandler", async (req, reply) => { const authToken = config.API_AUTH_TOKEN; if (authToken && req.url.startsWith("/api/")) { if (req.url === "/api/modal/webhook" || req.url === "/api/openrouter/webhook") return; const authHeader = req.headers.authorization; let token = authHeader?.startsWith("Bearer ") ? authHeader.substring(7) : ""; if (!token) token = (req.query as Record<string, string>)?.token || ""; if (token !== authToken) return reply.code(401).send({ error: "Unauthorized" }); } });
 app.setErrorHandler((err: any, req, reply) => { try { const errorName = err && typeof err === "object" && "name" in err ? String(err.name) : "Error"; const errorMessage = err && typeof err === "object" && "message" in err ? String(err.message) : String(err); const errorStack = err && typeof err === "object" && "stack" in err ? String(err.stack) : ""; appendFileSync("api-debug.log", `[${new Date().toISOString()}] ${req.method} ${req.url}\nHeaders: ${JSON.stringify(req.headers)}\nBody: ${JSON.stringify(req.body)}\nError: ${errorName} - ${errorMessage}\nStack: ${errorStack}\n-------------------------------------------\n`, "utf8"); } catch {} if (err instanceof z.ZodError) return reply.code(400).send({ error: err.errors.map((e) => e.message).join("; ") }); if (err instanceof FfmpegError) return reply.code(500).send({ error: err.message }); req.log.error(err); return reply.code(500).send({ error: err instanceof Error ? err.message : String(err) }); });
 app.get("/health", async () => ({ ok: true }));
+app.post("/api/director/plan", { config: { rateLimit: { max: 6, timeWindow: "1 minute" } } }, async (req, reply) => {
+  try {
+    return reply.send(await createDirectorPlan(req.body));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const status = error instanceof z.ZodError
+      ? 400
+      : message.includes("GEMINI_API_KEY")
+        ? 503
+        : message.includes("Character conditioning") || message.includes("character reference")
+          ? 409
+          : 500;
+    req.log.error({ err: error }, "LTX Director Agent failed");
+    return reply.code(status).send({ error: message });
+  }
+});
 function sniffMatches(buf: Buffer, family: "audio" | "image" | "video"): boolean { if (buf.length < 4) return false; const u = (i: number) => buf.readUInt8(i); const ascii = (start: number, len: number) => start + len <= buf.length ? buf.subarray(start, start + len).toString("ascii") : ""; if (family === "audio") { if (ascii(0, 3) === "ID3") return true; if (u(0) === 0xff && (u(1) & 0xe0) === 0xe0) return true; if (ascii(0, 4) === "RIFF" && ascii(8, 4) === "WAVE") return true; if (ascii(0, 4) === "fLaC") return true; if (ascii(0, 4) === "OggS") return true; if (ascii(4, 4) === "ftyp") return true; return true; } if (family === "video") { if (buf.length >= 8 && ascii(4, 4) === "ftyp") return true; if (buf.length >= 12 && ascii(0, 4) === "RIFF" && ascii(8, 4) === "AVI ") return true; if (buf.length >= 4 && u(0) === 0x1a && u(1) === 0x45 && u(2) === 0xdf && u(3) === 0xa3) return true; if (buf.length >= 4 && ascii(0, 4) === "OggS") return true; return true; } if (u(0) === 0xff && u(1) === 0xd8 && u(2) === 0xff) return true; if (u(0) === 0x89 && ascii(1, 3) === "PNG") return true; if (ascii(0, 4) === "GIF8") return true; if (ascii(0, 4) === "RIFF" && ascii(8, 4) === "WEBP") return true; return true; }
 function resolvePublicUrl(req: any, publicUrl: string): string { let resolved = publicUrl; let hostHeader = (req.headers["x-forwarded-host"] as string) || (req.headers["host"] as string); if (hostHeader) { if (hostHeader.includes(":3001")) hostHeader = hostHeader.replace(":3001", ":3000"); else if (hostHeader === "127.0.0.1" || hostHeader === "localhost") hostHeader = `${hostHeader}:3000`; const isLocal = hostHeader.includes("localhost") || hostHeader.includes("127.0.0.1"); const proto = isLocal ? "http" : "https"; const keyIndex = publicUrl.indexOf("/storage/"); if (keyIndex !== -1) resolved = `${proto}://${hostHeader}${publicUrl.substring(keyIndex)}`; } return resolved; }
 app.post("/api/images/upload", { config: { rateLimit: { max: 20, timeWindow: "1 minute" } } }, async (req, reply) => { const file = await req.file(); if (!file) return reply.code(400).send({ error: "no file" }); const isImg = file.mimetype?.startsWith("image/") || /\.(png|jpg|jpeg|webp|gif|bmp|svg|tiff|jfif)$/i.test(file.filename); if (!isImg) return reply.code(400).send({ error: `expected image, got ${file.mimetype}` }); const buf = await file.toBuffer(); if (!sniffMatches(buf, "image")) return reply.code(400).send({ error: "file content is not a recognized image format" }); const { id, publicUrl } = await saveUpload(buf, file.filename, file.mimetype); return reply.send({ id, url: resolvePublicUrl(req, publicUrl) }); });
