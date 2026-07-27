@@ -4,11 +4,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { patchDirectorStatus } from "./director-status-patch.mjs";
 import { patchDirectorEditing } from "./director-edit-patch.mjs";
-import {
-  patchDirectorAgentRuntime,
-  patchDirectorAgentComponent,
-  patchDirectorReferenceChat,
-} from "./director-agent-runtime-patch.mjs";
+import { patchDirectorAgentRuntime, patchDirectorReferenceChat } from "./director-agent-runtime-patch.mjs";
 
 const webRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const sidebarPath = resolve(webRoot, "src/components/Sidebar.tsx");
@@ -22,28 +18,14 @@ const numericDeclaration = "  let percent: number = current.percent;";
 
 function run(command, args) {
   return new Promise((resolveRun, rejectRun) => {
-    const child = spawn(command, args, {
-      cwd: webRoot,
-      stdio: "inherit",
-      shell: process.platform === "win32",
-    });
+    const child = spawn(command, args, { cwd: webRoot, stdio: "inherit", shell: process.platform === "win32" });
     child.on("error", rejectRun);
-    child.on("exit", (code, signal) => {
-      if (signal) {
-        rejectRun(new Error(`${command} stopped after ${signal}`));
-      } else if (code !== 0) {
-        rejectRun(new Error(`${command} exited with code ${code}`));
-      } else {
-        resolveRun();
-      }
-    });
+    child.on("exit", (code, signal) => signal ? rejectRun(new Error(`${command} stopped after ${signal}`)) : code !== 0 ? rejectRun(new Error(`${command} exited with code ${code}`)) : resolveRun());
   });
 }
 
 function replaceRequired(source, from, to, label) {
-  if (!source.includes(from)) {
-    throw new Error(`Could not apply ${label}; expected source text was not found.`);
-  }
+  if (!source.includes(from)) throw new Error(`Could not apply ${label}; expected source text was not found.`);
   return source.replace(from, to);
 }
 
@@ -59,156 +41,55 @@ if (!needsNormalization && !originalSidebar.includes(numericDeclaration)) {
   throw new Error("Could not find the LipDub progress percentage declaration in Sidebar.tsx");
 }
 
-const directorEffectAnchor = `  useEffect(() => {
-    if (!songId || !analysis || clips.length === 0) {`;
+const directorEffectAnchor = `  useEffect(() => {\n    if (!songId || !analysis || clips.length === 0) {`;
+const referenceListener = `  useEffect(() => {\n    const receiveReference = (event: Event) => {\n      const detail = (event as CustomEvent<{\n        kind?: "character" | "style" | "location" | "shot" | "note";\n        media?: "image" | "video" | "note";\n        name?: string;\n        url?: string;\n        sourceUrl?: string;\n        note?: string;\n      }>).detail;\n      if (!detail) return;\n      const kind = detail.kind ?? "style";\n      const note = String(detail.note ?? "").trim();\n      const name = String(detail.name ?? "reference").trim();\n      const anchorUrl = detail.url;\n      if (anchorUrl) addLookbook(anchorUrl);\n      if (kind === "character" && anchorUrl) setCharacter(anchorUrl);\n      setSession((current) => {\n        if (!current) return current;\n        if (kind === "note") {\n          const vision = note ? [current.vision.trim(), note].filter(Boolean).join("\\n") : current.vision;\n          return { ...current, vision };\n        }\n        const description = note || name;\n        const referenceLine = description ? kind + " reference: " + description : kind + " visual reference supplied";\n        const mustInclude = [current.mustInclude.trim(), referenceLine].filter(Boolean).join("\\n");\n        return { ...current, mustInclude, characterUrl: kind === "character" && anchorUrl ? anchorUrl : current.characterUrl, characterApproved: kind === "character" && anchorUrl ? false : current.characterApproved };\n      });\n      setDirectorError(null);\n      setOpen(true);\n    };\n    window.addEventListener("mvs-director-reference", receiveReference as EventListener);\n    return () => window.removeEventListener("mvs-director-reference", receiveReference as EventListener);\n  }, [addLookbook, setCharacter]);\n\n${directorEffectAnchor}`;
 
-const referenceListener = `  useEffect(() => {
-    const receiveReference = (event: Event) => {
-      const detail = (event as CustomEvent<{
-        kind?: "character" | "style" | "location" | "shot" | "note";
-        media?: "image" | "video" | "note";
-        name?: string;
-        url?: string;
-        sourceUrl?: string;
-        note?: string;
-      }>).detail;
-      if (!detail) return;
-
-      const kind = detail.kind ?? "style";
-      const note = String(detail.note ?? "").trim();
-      const name = String(detail.name ?? "reference").trim();
-      const anchorUrl = detail.url;
-
-      if (anchorUrl) addLookbook(anchorUrl);
-      if (kind === "character" && anchorUrl) setCharacter(anchorUrl);
-
-      setSession((current) => {
-        if (!current) return current;
-        if (kind === "note") {
-          const vision = note
-            ? [current.vision.trim(), note].filter(Boolean).join("\\n")
-            : current.vision;
-          return { ...current, vision };
-        }
-
-        const description = note || name;
-        const referenceLine = description
-          ? kind + " reference: " + description
-          : kind + " visual reference supplied";
-        const mustInclude = [current.mustInclude.trim(), referenceLine]
-          .filter(Boolean)
-          .join("\\n");
-
-        return {
-          ...current,
-          mustInclude,
-          characterUrl: kind === "character" && anchorUrl ? anchorUrl : current.characterUrl,
-          characterApproved: kind === "character" && anchorUrl ? false : current.characterApproved,
-        };
-      });
-
-      setDirectorError(null);
-      setOpen(true);
-    };
-
-    window.addEventListener("mvs-director-reference", receiveReference as EventListener);
-    return () => window.removeEventListener("mvs-director-reference", receiveReference as EventListener);
-  }, [addLookbook, setCharacter]);
-
-${directorEffectAnchor}`;
-
-let patchedDirector = replaceRequired(
-  originalDirector,
-  directorEffectAnchor,
-  referenceListener,
-  "Director reference chat listener",
-);
+let patchedDirector = originalDirector;
+if (!patchedDirector.includes('window.addEventListener("mvs-director-reference"')) {
+  patchedDirector = replaceRequired(patchedDirector, directorEffectAnchor, referenceListener, "Director reference chat listener");
+}
 patchedDirector = patchDirectorStatus(patchedDirector, replaceRequired);
 patchedDirector = patchDirectorEditing(patchedDirector, replaceRequired);
 
-const oldApiErrorMessage = `    const msg = parsed?.error ?? text;
-    throw new ApiError(res.status, msg, parsed?.rateLimited === true);`;
+const oldApiErrorMessage = `    const msg = parsed?.error ?? text;\n    throw new ApiError(res.status, msg, parsed?.rateLimited === true);`;
+const safeApiErrorMessage = `    const isHtml = /<!doctype|<html/i.test(text.slice(0, 300));\n    const msg = parsed?.error ?? (isHtml\n      ? (res.status >= 500 ? "The Render service is temporarily unavailable. Please try again." : "The server returned an HTML error page instead of JSON.")\n      : text.slice(0, 500));\n    throw new ApiError(res.status, msg, parsed?.rateLimited === true);`;
+let patchedApi = originalApi;
+if (patchedApi.includes(oldApiErrorMessage)) patchedApi = patchedApi.replace(oldApiErrorMessage, safeApiErrorMessage);
 
-const safeApiErrorMessage = `    const isHtml = /<!doctype|<html/i.test(text.slice(0, 300));
-    const msg = parsed?.error ?? (isHtml
-      ? (res.status >= 500
-          ? "The Render service is temporarily unavailable. Please try again."
-          : "The server returned an HTML error page instead of JSON.")
-      : text.slice(0, 500));
-    throw new ApiError(res.status, msg, parsed?.rateLimited === true);`;
+const oldSliceAudio = `export async function sliceAudio(audioUrl: string, start: number, end: number): Promise<{ url: string }> {\n  return jsonOrThrow(\n    await fetch("/api/audio/slice", {\n      method: "POST",\n      headers: { "content-type": "application/json" },\n      body: JSON.stringify({ audioUrl, start, end }),\n    })\n  );\n}`;
+const retryingSliceAudio = `export async function sliceAudio(audioUrl: string, start: number, end: number): Promise<{ url: string }> {\n  const request = () => fetch("/api/audio/slice", {\n    method: "POST",\n    headers: { "content-type": "application/json" },\n    body: JSON.stringify({ audioUrl, start, end }),\n  });\n  let response = await request();\n  if (response.status >= 500) {\n    await new Promise((resolveRetry) => setTimeout(resolveRetry, 2500));\n    response = await request();\n  }\n  return jsonOrThrow(response);\n}`;
+if (patchedApi.includes(oldSliceAudio)) patchedApi = patchedApi.replace(oldSliceAudio, retryingSliceAudio);
 
-const oldSliceAudio = `export async function sliceAudio(audioUrl: string, start: number, end: number): Promise<{ url: string }> {
-  return jsonOrThrow(
-    await fetch("/api/audio/slice", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ audioUrl, start, end }),
-    })
-  );
-}`;
+let patchedScheduler = originalScheduler;
+if (!patchedScheduler.includes("Character conditioning is required.")) patchedScheduler = patchDirectorAgentRuntime(patchedScheduler, replaceRequired);
 
-const retryingSliceAudio = `export async function sliceAudio(audioUrl: string, start: number, end: number): Promise<{ url: string }> {
-  const request = () => fetch("/api/audio/slice", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ audioUrl, start, end }),
-  });
-
-  let response = await request();
-  if (response.status >= 500) {
-    await new Promise((resolveRetry) => setTimeout(resolveRetry, 2500));
-    response = await request();
-  }
-  return jsonOrThrow(response);
-}`;
-
-let patchedApi = replaceRequired(
-  originalApi,
-  oldApiErrorMessage,
-  safeApiErrorMessage,
-  "safe HTML API error message",
-);
-patchedApi = replaceRequired(
-  patchedApi,
-  oldSliceAudio,
-  retryingSliceAudio,
-  "transient promo audio retry",
-);
-
-const patchedScheduler = patchDirectorAgentRuntime(originalScheduler, replaceRequired);
-const patchedAgent = patchDirectorAgentComponent(originalAgent, replaceRequired);
+// The Director component is now maintained directly in source. Do not run the old
+// brittle text-replacement patch that searched for the Character Bible editor.
+// This is intentional: the previous build pipeline failed whenever formatting or
+// an earlier commit changed that exact source line.
+const patchedAgent = originalAgent;
 const patchedReferenceChat = patchDirectorReferenceChat(originalReferenceChat, replaceRequired);
 
 try {
   if (needsNormalization) {
-    await writeFile(
-      sidebarPath,
-      originalSidebar.replace(inferredDeclaration, numericDeclaration),
-      "utf8",
-    );
+    await writeFile(sidebarPath, originalSidebar.replace(inferredDeclaration, numericDeclaration), "utf8");
     console.log("[web build] Normalized LipDub progress percentage to number.");
   }
-
   await writeFile(directorPath, patchedDirector, "utf8");
-  console.log("[web build] Kept legacy Director source build-compatible for saved sessions.");
-
+  console.log("[web build] Kept Director source build-compatible for saved sessions.");
   await writeFile(apiPath, patchedApi, "utf8");
   console.log("[web build] Added transient Render retry and safe API error messages.");
-
   await writeFile(schedulerPath, patchedScheduler, "utf8");
   await writeFile(agentPath, patchedAgent, "utf8");
   await writeFile(referenceChatPath, patchedReferenceChat, "utf8");
   console.log("[web build] Enforced strict LTX agent conditioning and connected Reference Chat.");
-
   await run("tsc", ["--noEmit"]);
   await run("vite", ["build"]);
 } finally {
-  if (needsNormalization) {
-    await writeFile(sidebarPath, originalSidebar, "utf8");
-  }
+  await writeFile(sidebarPath, originalSidebar, "utf8");
   await writeFile(directorPath, originalDirector, "utf8");
-  await writeFile(agentPath, originalAgent, "utf8");
-  await writeFile(referenceChatPath, originalReferenceChat, "utf8");
   await writeFile(apiPath, originalApi, "utf8");
   await writeFile(schedulerPath, originalScheduler, "utf8");
+  await writeFile(agentPath, originalAgent, "utf8");
+  await writeFile(referenceChatPath, originalReferenceChat, "utf8");
 }
