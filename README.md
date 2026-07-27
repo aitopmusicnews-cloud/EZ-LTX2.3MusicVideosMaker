@@ -25,6 +25,14 @@ Select a timeline clip and choose one of three modes in the right sidebar:
 
 The deployed Modal worker currently renders 1–5 second clips at 768×512 and 24 FPS. The first timeline clip defaults to Text → Video so a new project can start without an existing image or clip.
 
+## Project lifecycle
+
+Music Video Studio starts with a **new empty project** when the app is opened or reloaded. The active editor state is not automatically restored from browser persistence.
+
+Saved projects are returned to explicitly through the app's Save and Open/Load project workflows. Reloading the app does not automatically reopen the last active project.
+
+A new project may have no audio analysis yet. In that state, `analysis` is `null` until a song is loaded and analyzed. The UI should treat this as a valid new-project state and show the appropriate empty/new-project experience rather than assuming `analysis.sections` exists.
+
 ## Repository layout
 
 ```text
@@ -44,15 +52,43 @@ Requirements:
 - Python 3.12 and the Modal CLI only when deploying Modal workers
 - ffmpeg for local audio/video processing
 
+### Clean first-time checkout
+
+For a clean local setup from the current `main` branch:
+
 ```bash
 git clone https://github.com/aitopmusicnews-cloud/Videos.git
 cd Videos
+git checkout main
+git pull origin main
 npm ci
 cp .env.example .env
+```
+
+Configure the required values in `.env`, then start the development environment:
+
+```bash
 npm run dev
 ```
 
 Open `http://localhost:3000`. The API runs on `http://localhost:3001`.
+
+### Clean deployment troubleshooting
+
+When troubleshooting a deployed build, start from a fresh checkout of `main` and rebuild from that checkout. This helps eliminate stale `node_modules`, old Vite build output, local source changes, and cached dependencies as possible causes.
+
+```bash
+git clone https://github.com/aitopmusicnews-cloud/Videos.git
+cd Videos
+git checkout main
+git pull origin main
+npm ci
+cp .env.example .env
+npm run build
+npm start
+```
+
+After deploying a new build, if the browser still appears to run an older `index-*.js` bundle, use a hard refresh or a private/incognito window and clear site data/local storage as appropriate. Verify that the deployed service was rebuilt from the expected `main` commit before continuing to debug source code.
 
 ## Build and checks
 
@@ -161,6 +197,14 @@ Health check: /health
 6. The task endpoint returns `SUCCEEDED` and the generated MP4 URL.
 
 ## Troubleshooting
+
+### App opens with an old project after reload
+
+The active editor is intended to start with a new empty project after reload. Saved projects must be opened explicitly. If an old project still appears after a deployment, first verify that the deployed service is running a fresh build from the expected `main` commit, then clear browser site data/local storage or test in a private/incognito window.
+
+### `Cannot read properties of null (reading 'sections')`
+
+A new project can legitimately have `analysis === null` before a song has been loaded and analyzed. UI components must not assume `analysis.sections` exists during the new-project state. Rebuild and redeploy the current `main` code before diagnosing a production bundle; if the error persists, verify the deployed commit and inspect the generated bundle/source map to identify the exact component making the null access.
 
 ### Render builds but cannot start
 
