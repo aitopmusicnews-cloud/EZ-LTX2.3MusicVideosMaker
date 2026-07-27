@@ -13,7 +13,8 @@ function run(command, args) {
 await run("tsc", ["-p", "tsconfig.json"]);
 
 // Gemini 3.6 Flash requires deprecated sampling parameters such as temperature
-// to be omitted. Structured output should follow the current raw REST contract.
+// to be omitted. Its v1beta responseFormat TextResponseFormat.mimeType field is
+// an enum; JSON output must therefore use APPLICATION_JSON.
 const directorDistPath = resolve(process.cwd(), "dist/director_agent.js");
 let directorDist = await readFile(directorDistPath, "utf8");
 
@@ -21,24 +22,24 @@ directorDist = directorDist.replace(/\s*temperature:\s*0\.35,\s*/g, "\n");
 
 const legacyStructuredOutput = `responseMimeType: "application/json",
                 responseJsonSchema: RESPONSE_SCHEMA,`;
+const stringStructuredOutput = `responseFormat: {
+                    text: {
+                        mimeType: "application/json",
+                        schema: RESPONSE_SCHEMA,
+                    },
+                },`;
 const enumStructuredOutput = `responseFormat: {
                     text: {
                         mimeType: "APPLICATION_JSON",
                         schema: RESPONSE_SCHEMA,
                     },
                 },`;
-const officialStructuredOutput = `responseFormat: {
-                    text: {
-                        mimeType: "application/json",
-                        schema: RESPONSE_SCHEMA,
-                    },
-                },`;
 
 if (directorDist.includes(legacyStructuredOutput)) {
-  directorDist = directorDist.replace(legacyStructuredOutput, officialStructuredOutput);
-} else if (directorDist.includes(enumStructuredOutput)) {
-  directorDist = directorDist.replace(enumStructuredOutput, officialStructuredOutput);
-} else if (!directorDist.includes('mimeType: "application/json"')) {
+  directorDist = directorDist.replace(legacyStructuredOutput, enumStructuredOutput);
+} else if (directorDist.includes(stringStructuredOutput)) {
+  directorDist = directorDist.replace(stringStructuredOutput, enumStructuredOutput);
+} else if (!directorDist.includes('mimeType: "APPLICATION_JSON"')) {
   throw new Error("Could not find the compiled Gemini Director structured-output configuration.");
 }
 
@@ -71,6 +72,12 @@ if (directorDist.includes(oldErrorParser)) {
 if (directorDist.includes("temperature: 0.35")) {
   throw new Error("Gemini Director build still contains deprecated temperature configuration.");
 }
+if (directorDist.includes('responseFormat: {\n                    text: {\n                        mimeType: "application/json"')) {
+  throw new Error("Gemini Director build still contains the invalid application/json response MIME string.");
+}
+if (!directorDist.includes('mimeType: "APPLICATION_JSON"')) {
+  throw new Error("Gemini Director build does not contain the APPLICATION_JSON response MIME enum.");
+}
 
 await writeFile(directorDistPath, directorDist, "utf8");
-console.log("[api build] Compiled API with Gemini 3.6-compatible Director request.");
+console.log("[api build] Compiled API with Gemini 3.6-compatible APPLICATION_JSON structured output.");
