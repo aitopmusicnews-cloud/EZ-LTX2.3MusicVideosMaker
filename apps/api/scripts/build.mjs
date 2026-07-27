@@ -56,39 +56,38 @@ if (!patchedServer.includes('app.post("/api/director/plan"')) {
   if (patchedServer.includes(generationAnchor)) {
     patchedServer = replaceRequired(patchedServer, generationAnchor, directorRoute, "Director agent API route");
   } else {
-    // The current server already contains the Director route wiring in source.
-    console.log("[api build] Director agent API route already present; skipped legacy route patch.");
+    console.log("[api build] Director agent API route already wired elsewhere; skipped legacy route patch.");
   }
 }
 
 let patchedModalAi = originalModalAi;
-const modalAnchor = `  const duration = Math.min(5, Math.max(1, Number(req.duration ?? 5)));
-  const initImageUrl = req.promptImage ?? req.imageUrl;
-  const jobId = `;
-if (patchedModalAi.includes(modalAnchor)) {
-  patchedModalAi = replaceRequired(
-    patchedModalAi,
-    modalAnchor,
-    `  const duration = Math.min(5, Math.max(1, Number(req.duration ?? 5)));
-  const initImageUrl = req.promptImage ?? req.imageUrl;
-  const characterRequired = Boolean(
-    (req as ImageToVideoRequest & { characterRequired?: boolean; requiresCharacter?: boolean }).characterRequired ??
-    (req as ImageToVideoRequest & { characterRequired?: boolean; requiresCharacter?: boolean }).requiresCharacter
-  );
-  if (characterRequired && !initImageUrl) {
-    throw new Error("Character conditioning is required. LTX generation was not started because no character image was attached.");
+const characterValidationMarker = "Character conditioning is required. LTX generation was not started because no character image was attached.";
+if (!patchedModalAi.includes(characterValidationMarker)) {
+  const modalAnchor = `  const duration = Math.min(5, Math.max(1, Number(req.duration ?? 5)));\n  const initImageUrl = req.promptImage ?? req.imageUrl;\n  const jobId = `;
+  if (patchedModalAi.includes(modalAnchor)) {
+    patchedModalAi = replaceRequired(
+      patchedModalAi,
+      modalAnchor,
+      `  const duration = Math.min(5, Math.max(1, Number(req.duration ?? 5)));\n  const initImageUrl = req.promptImage ?? req.imageUrl;\n  const characterRequired = Boolean(\n    (req as ImageToVideoRequest & { characterRequired?: boolean; requiresCharacter?: boolean }).characterRequired ??\n    (req as ImageToVideoRequest & { characterRequired?: boolean; requiresCharacter?: boolean }).requiresCharacter\n  );\n  if (characterRequired && !initImageUrl) {\n    throw new Error("${characterValidationMarker}");\n  }\n  const jobId = `,
+      "strict character condition validation",
+    );
+
+    const payloadAnchor = `        init_image_url: initImageUrl || undefined, job_id: jobId, webhook_url: webhookUrl`;
+    if (patchedModalAi.includes(payloadAnchor)) {
+      patchedModalAi = replaceRequired(
+        patchedModalAi,
+        payloadAnchor,
+        `        init_image_url: initImageUrl || undefined, character_required: characterRequired, job_id: jobId, webhook_url: webhookUrl`,
+        "character requirement Modal payload",
+      );
+    } else {
+      console.log("[api build] Modal payload already has a different current shape; skipped legacy character payload patch.");
+    }
+  } else {
+    console.log("[api build] Modal AI source already uses the current generation shape; skipped legacy character patch.");
   }
-  const jobId = `,
-    "strict character condition validation",
-  );
-  patchedModalAi = replaceRequired(
-    patchedModalAi,
-    `        init_image_url: initImageUrl || undefined,\n        job_id: jobId,`,
-    `        init_image_url: initImageUrl || undefined,\n        character_required: characterRequired,\n        job_id: jobId,`,
-    "character requirement Modal payload",
-  );
 } else {
-  console.log("[api build] Modal AI source already contains current character validation; skipped legacy Modal patch.");
+  console.log("[api build] Character conditioning validation already present; skipped legacy character patch.");
 }
 
 const patchedDirectorAgent = patchDirectorAgentNormalization(originalDirectorAgent, replaceRequired);
