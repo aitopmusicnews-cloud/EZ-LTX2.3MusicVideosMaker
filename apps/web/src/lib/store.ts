@@ -12,7 +12,11 @@ export const ZOOM_MIN = 1;
 export const ZOOM_MAX = 32;
 export const ZOOM_STEP = 1.5;
 
-const PERSIST_KEY = "mvs-project-v1";
+// Bump the persisted store version so the app starts with a clean project
+// after the Modal workspace migration. The old v1 state can contain stale
+// project/audio references from the previous deployment and must not be
+// restored into the new Modal environment.
+const PERSIST_KEY = "mvs-project-v2";
 
 const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n));
 
