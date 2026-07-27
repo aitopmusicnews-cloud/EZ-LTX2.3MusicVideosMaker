@@ -6,7 +6,6 @@ import { fileURLToPath } from "node:url";
 const apiRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const serverPath = resolve(apiRoot, "src/server.ts");
 const modalAiPath = resolve(apiRoot, "src/modalAI.ts");
-const directorAgentPath = resolve(apiRoot, "src/director_agent.ts");
 
 function run(command, args) {
   return new Promise((resolveRun, rejectRun) => {
@@ -23,7 +22,6 @@ function replaceRequired(source, from, to, label) {
 
 const originalServer = await readFile(serverPath, "utf8");
 const originalModalAi = await readFile(modalAiPath, "utf8");
-const originalDirectorAgent = await readFile(directorAgentPath, "utf8");
 
 let patchedServer = originalServer;
 if (!patchedServer.includes('import { createDirectorPlan } from "./director_agent.js";')) {
@@ -59,49 +57,17 @@ if (!patchedServer.includes('app.post("/api/director/plan"')) {
   }
 }
 
-let patchedModalAi = originalModalAi;
-const characterValidationMarker = "Character conditioning is required. LTX generation was not started because no character image was attached.";
-if (!patchedModalAi.includes(characterValidationMarker)) {
-  const modalAnchor = `  const duration = Math.min(5, Math.max(1, Number(req.duration ?? 5)));\n  const initImageUrl = req.promptImage ?? req.imageUrl;\n  const jobId = `;
-  if (patchedModalAi.includes(modalAnchor)) {
-    patchedModalAi = replaceRequired(
-      patchedModalAi,
-      modalAnchor,
-      `  const duration = Math.min(5, Math.max(1, Number(req.duration ?? 5)));\n  const initImageUrl = req.promptImage ?? req.imageUrl;\n  const characterRequired = Boolean(\n    (req as ImageToVideoRequest & { characterRequired?: boolean; requiresCharacter?: boolean }).characterRequired ??\n    (req as ImageToVideoRequest & { characterRequired?: boolean; requiresCharacter?: boolean }).requiresCharacter\n  );\n  if (characterRequired && !initImageUrl) {\n    throw new Error("${characterValidationMarker}");\n  }\n  const jobId = `,
-      "strict character condition validation",
-    );
-
-    const payloadAnchor = `        init_image_url: initImageUrl || undefined, job_id: jobId, webhook_url: webhookUrl`;
-    if (patchedModalAi.includes(payloadAnchor)) {
-      patchedModalAi = replaceRequired(
-        patchedModalAi,
-        payloadAnchor,
-        `        init_image_url: initImageUrl || undefined, character_required: characterRequired, job_id: jobId, webhook_url: webhookUrl`,
-        "character requirement Modal payload",
-      );
-    } else {
-      console.log("[api build] Modal payload already has a different current shape; skipped legacy character payload patch.");
-    }
-  } else {
-    console.log("[api build] Modal AI source already uses the current generation shape; skipped legacy character patch.");
-  }
-} else {
-  console.log("[api build] Character conditioning validation already present; skipped legacy character patch.");
-}
-
-// The Director agent is now maintained directly in source. Do not apply the
-// old build-time normalization patch: it rewrote internal function signatures
-// and caused TypeScript errors when the source evolved.
-const patchedDirectorAgent = originalDirectorAgent;
+// Current Modal AI source owns character validation and payload shape. Do not
+// rewrite it during the build: previous text-based patches caused drift and
+// masked the actual TypeScript errors in the API source.
+const patchedModalAi = originalModalAi;
 
 try {
   await writeFile(serverPath, patchedServer, "utf8");
   await writeFile(modalAiPath, patchedModalAi, "utf8");
-  await writeFile(directorAgentPath, patchedDirectorAgent, "utf8");
-  console.log("[api build] Wired Gemini LTX Director route and strict character conditioning without legacy Director source rewriting.");
+  console.log("[api build] Wired Gemini LTX Director route without legacy Director/Modal source rewriting.");
   await run("tsc", ["-p", "tsconfig.json"]);
 } finally {
   await writeFile(serverPath, originalServer, "utf8");
   await writeFile(modalAiPath, originalModalAi, "utf8");
-  await writeFile(directorAgentPath, originalDirectorAgent, "utf8");
 }
