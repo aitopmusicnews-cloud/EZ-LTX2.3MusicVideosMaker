@@ -12,11 +12,10 @@ export const ZOOM_MIN = 1;
 export const ZOOM_MAX = 32;
 export const ZOOM_STEP = 1.5;
 
-// Bump the persisted store version so the app starts with a clean project
-// after the Modal workspace migration. The old v1 state can contain stale
-// project/audio references from the previous deployment and must not be
-// restored into the new Modal environment.
-const PERSIST_KEY = "mvs-project-v2";
+// Force a clean reset after the Modal workspace migration. Any project state
+// persisted under the previous versions may reference stale workspace assets,
+// clips, or analysis data and must not be restored into this deployment.
+const PERSIST_KEY = "mvs-project-v3";
 
 const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n));
 
@@ -408,7 +407,9 @@ export const useStore = create<State>()(
     }),
     {
       name: PERSIST_KEY,
+      version: 3,
       storage: createJSONStorage(() => localStorage),
+      migrate: () => ({ ...emptyState }),
       partialize: (s) => ({
         projectId: s.projectId,
         projectName: s.projectName,
