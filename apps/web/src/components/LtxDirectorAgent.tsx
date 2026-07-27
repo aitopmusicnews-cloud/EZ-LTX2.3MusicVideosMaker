@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { enqueueGeneration } from "../lib/scheduler.js";
 import { useStore } from "../lib/store.js";
 import { toast } from "../lib/toast.js";
+import { startTextToImage, pollTask, saveImageToLibrary } from "../lib/api.js";
 
 type ReferenceKind = "character" | "style" | "location" | "shot" | "note";
 type ReferenceMedia = "image" | "video" | "note";
@@ -62,6 +63,8 @@ type AgentSession = {
   plan: LtxDirectorPlan | null;
   planAccepted: boolean;
   productionStarted: boolean;
+  characterApproved: boolean;
+  visualApprovals: Record<string, { url: string; approved: boolean }>;
 };
 
 type DirectorReferenceDetail = {
@@ -93,6 +96,8 @@ function emptySession(): AgentSession {
     plan: null,
     planAccepted: false,
     productionStarted: false,
+    characterApproved: false,
+    visualApprovals: {},
   };
 }
 
@@ -131,6 +136,31 @@ async function requestDirectorPlan(payload: Record<string, unknown>): Promise<Lt
     throw new Error("The LTX Director Agent returned an incomplete plan.");
   }
   return data as LtxDirectorPlan;
+}
+
+async function generateApprovalImage(prompt: string, referenceUrl?: string): Promise<string> {
+  const payload: Record<string, unknown> = {
+    prompt: prompt.trim(),
+    promptText: prompt.trim(),
+    model: "openrouter_image_flash",
+    ratio: "1920:1080",
+    ...(referenceUrl ? { referenceImages: [{ uri: referenceUrl }] } : {}),
+  };
+  const { id } = await startTextToImage(payload);
+  const task = await pollTask(id);
+  const imageUrl = task.outputUrl || (task.output as any)?.imageUrl || (task.output as any)?.[0] || (task.output as any)?.url;
+  if ((task.status || "").toUpperCase() !== "SUCCEEDED" || !imageUrl) {
+    throw new Error(task.error ?? "Image generation did not return an image.");
+  }
+  void saveImageToLibrary({
+    id: `img-${crypto.randomUUID().slice(0, 8)}`,
+    name: prompt.trim().slice(0, 60),
+    url: imageUrl,
+    source: "generated",
+    prompt: prompt.trim(),
+    model: "openrouter_image_flash",
+  }).catch((err) => console.warn("Director approval image library save failed", err));
+  return imageUrl;
 }
 
 function words(text: string): number {
@@ -271,6 +301,30 @@ export function LtxDirectorAgent() {
     return reference?.anchorUrl ?? (reference?.media === "image" ? reference.url ?? "" : "");
   };
 
+  const setVisualApproval = (key: string, value: { url: string; approved: boolean }) => {
+    setSession((current) => ({
+      ...current,
+      planAccepted: false,
+      visualApprovals: { ...current.visualApprovals, [key]: value },
+    }));
+  };
+
+  const generateApprovalVisual = async (key: string, prompt: string, referenceUrl?: string) => {
+    setError(null);
+    setBusy(`Generating approval image for ${key === "treatment" ? "the treatment" : key === "world" ? "the visual world" : key === "character" ? "the character" : "the shot"}`);
+    try {
+      const url = await generateApprovalImage(prompt, referenceUrl);
+      setVisualApproval(key, { url, approved: false });
+      toast.success("Approval image generated");
+    } catch (failure) {
+      const message = failure instanceof Error ? failure.message : String(failure);
+      setError(message);
+      toast.error(`Image generation failed: ${message}`);
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const createPlan = async () => {
     if (session.vision.trim().length < 8) {
       setError("Describe the video vision before asking the LTX Director Agent to plan it.");
@@ -310,7 +364,7 @@ export function LtxDirectorAgent() {
           note: reference.note,
         })),
       });
-      updateSession({ plan, planAccepted: false, productionStarted: false });
+      updateSession({ plan, planAccepted: false, productionStarted: false, characterApproved: false, visualApprovals: {} });
       toast.success(`LTX Director plan created with ${plan.agentModel}`);
     } catch (failure) {
       const message = failure instanceof Error ? failure.message : String(failure);
@@ -366,6 +420,13 @@ export function LtxDirectorAgent() {
     const plan = session.plan;
     if (!plan) return;
     if (!session.planAccepted && !validateAndApplyPlan()) return;
+    const treatmentApproved = Boolean(session.visualApprovals.treatment?.approved);
+    const worldApproved = Boolean(session.visualApprovals.world?.approved);
+    const shotsApproved = plan.shots.every((shot) => Boolean(session.visualApprovals[`shot:${shot.clipId}`]?.approved));
+    if (!session.characterApproved || !treatmentApproved || !worldApproved || !shotsApproved) {
+      setError("Production is locked until the character, treatment, visual world, and every shot image are approved.");
+      return;
+    }
 
     const currentClips = useStore.getState().clips;
     for (const shot of plan.shots) {
@@ -454,7 +515,7 @@ export function LtxDirectorAgent() {
           <div style={statusBoxStyle} role="status" aria-live="polite">
             <div style={statusHeaderStyle}><span>{busy}</span><strong>{elapsed}s</strong></div>
             <div style={statusTrackStyle}><div style={indeterminateStyle} /></div>
-            <div style={statusDetailStyle}>No fallback planner is running. This remains active until Gemini returns a validated clip-by-clip plan.</div>
+            <div style={statusDetailStyle}>The Director is generating a real approval image. Production remains paused until you approve it.</div>
           </div>
         )}
 
@@ -480,7 +541,24 @@ export function LtxDirectorAgent() {
           </div>
 
           <section style={sectionStyle}>
-            <h3 style={sectionTitleStyle}>1. Creative direction</h3>
+            <h3 style={sectionTitleStyle}>1. Characters — approve the visual reference</h3>
+            <p style={helpStyle}>The Director starts with the character. Upload or apply a character reference, then approve the exact image that should anchor the production.</p>
+            {characterImageUrl ? (
+              <div style={approvalCardStyle}>
+                <img src={characterImageUrl} alt="Approved project character reference" style={approvalImageStyle} />
+                <div style={approvalActionsStyle}>
+                  <span style={approvalStatusStyle}>{session.characterApproved ? "✓ Character approved" : "Waiting for character approval"}</span>
+                  <button type="button" className="btn primary" onClick={() => updateSession({ characterApproved: true })}>Approve character</button>
+                  <button type="button" className="btn ghost" onClick={() => window.dispatchEvent(new CustomEvent("mvs-open-reference-chat"))}>Replace reference</button>
+                </div>
+              </div>
+            ) : (
+              <div style={blockingStyle}>No character reference is active. Open References and apply a character image before continuing.</div>
+            )}
+          </section>
+
+          <section style={sectionStyle}>
+            <h3 style={sectionTitleStyle}>2. Creative direction</h3>
             <Field label="Vision" value={session.vision} onChange={(vision) => updateSession({ vision, planAccepted: false })} placeholder="Describe the story, performance, world, emotion, locations, wardrobe, and camera behavior." />
             <Field label="Must include" value={session.mustInclude} onChange={(mustInclude) => updateSession({ mustInclude, planAccepted: false })} placeholder="Required actions, locations, props, symbols, wardrobe, or visual moments." />
             <Field label="Avoid" value={session.avoid} onChange={(avoid) => updateSession({ avoid, planAccepted: false })} placeholder="Anything the agent and LTX must not show." />
@@ -498,8 +576,25 @@ export function LtxDirectorAgent() {
           {session.plan && (
             <>
               <section style={sectionStyle}>
-                <h3 style={sectionTitleStyle}>2. Editable treatment</h3>
+                <h3 style={sectionTitleStyle}>3. Treatment — generate and approve the visual</h3>
                 <div style={modelBadgeStyle}>Planned by {session.plan.agentModel}</div>
+                <div style={approvalCardStyle}>
+                  {session.visualApprovals.treatment?.url ? (
+                    <img src={session.visualApprovals.treatment.url} alt="Treatment visual approval" style={approvalImageStyle} />
+                  ) : (
+                    <div style={approvalPlaceholderStyle}>No treatment visual generated yet.</div>
+                  )}
+                  <div style={approvalActionsStyle}>
+                    <button type="button" className="btn primary" disabled={!!busy} onClick={() => void generateApprovalVisual("treatment", `${session.plan!.treatment.visualStyle}. ${session.plan!.treatment.colorPalette}. ${session.plan!.treatment.cameraLanguage}. ${session.plan!.treatment.logline}`, characterImageUrl || undefined)}>
+                      {session.visualApprovals.treatment?.url ? "Regenerate treatment visual" : "Generate treatment visual"}
+                    </button>
+                    {session.visualApprovals.treatment?.url && (
+                      <button type="button" className="btn" onClick={() => setVisualApproval("treatment", { ...session.visualApprovals.treatment!, approved: true })}>
+                        {session.visualApprovals.treatment.approved ? "Treatment approved ✓" : "Approve treatment visual"}
+                      </button>
+                    )}
+                  </div>
+                </div>
                 <Field label="Title" value={session.plan.treatment.title} onChange={(value) => updateTreatment("title", value)} singleLine />
                 <Field label="Logline" value={session.plan.treatment.logline} onChange={(value) => updateTreatment("logline", value)} />
                 <Field label="Visual style" value={session.plan.treatment.visualStyle} onChange={(value) => updateTreatment("visualStyle", value)} />
@@ -509,7 +604,29 @@ export function LtxDirectorAgent() {
               </section>
 
               <section style={sectionStyle}>
-                <h3 style={sectionTitleStyle}>3. Character bible</h3>
+                <h3 style={sectionTitleStyle}>4. Visual development — approve the world</h3>
+                <p style={helpStyle}>The Director generates the visual world from the approved treatment. Approve it before scene and shot production can proceed.</p>
+                <div style={approvalCardStyle}>
+                  {session.visualApprovals.world?.url ? (
+                    <img src={session.visualApprovals.world.url} alt="Visual world approval" style={approvalImageStyle} />
+                  ) : (
+                    <div style={approvalPlaceholderStyle}>No visual-world image generated yet.</div>
+                  )}
+                  <div style={approvalActionsStyle}>
+                    <button type="button" className="btn primary" disabled={!!busy} onClick={() => void generateApprovalVisual("world", `Cinematic production design for ${session.plan!.treatment.title}. ${session.plan!.treatment.visualStyle}. ${session.plan!.treatment.colorPalette}. ${session.plan!.treatment.continuityStrategy}.`, characterImageUrl || undefined)}>
+                      {session.visualApprovals.world?.url ? "Regenerate world visual" : "Generate world visual"}
+                    </button>
+                    {session.visualApprovals.world?.url && (
+                      <button type="button" className="btn" onClick={() => setVisualApproval("world", { ...session.visualApprovals.world!, approved: true })}>
+                        {session.visualApprovals.world.approved ? "World approved ✓" : "Approve world visual"}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </section>
+
+              <section style={sectionStyle}>
+                <h3 style={sectionTitleStyle}>5. Character bible</h3>
                 <label style={fieldStyle}>
                   <span>Primary conditioning asset</span>
                   <select value={session.plan.characterBible.referenceId ?? ""} onChange={(event) => updateCharacterBible("referenceId", event.target.value || null)} style={inputStyle}>
@@ -524,26 +641,31 @@ export function LtxDirectorAgent() {
               </section>
 
               <section style={sectionStyle}>
-                <h3 style={sectionTitleStyle}>4. Clip-by-clip LTX instructions</h3>
-                <p style={helpStyle}>Every field is editable. Prompts have no UI character limit; LTX performs best when the final prompt stays below 200 words.</p>
+                <h3 style={sectionTitleStyle}>6. Scenes and shots — generate and approve every visual</h3>
+                <p style={helpStyle}>Every shot now has a real image-generation step. The Director will not start video production until every shot visual is approved.</p>
                 <div style={shotGridStyle}>
                   {session.plan.shots.map((shot) => {
                     const promptWords = words(shot.prompt);
                     const conditioningReady = !shot.requiresCharacter || Boolean(resolveReferenceUrl(shot.conditioningReferenceId));
+                    const shotApproval = session.visualApprovals[`shot:${shot.clipId}`];
                     return (
                       <article key={shot.clipId} style={{ ...shotCardStyle, borderColor: conditioningReady ? "rgba(255,255,255,.13)" : "rgba(239,68,68,.65)" }}>
                         <div style={shotHeaderStyle}>
                           <strong>{shot.sectionLabel}</strong>
                           <span style={smallStyle}>{formatTime(shot.start)}–{formatTime(shot.end)} · {shot.clipId}</span>
                         </div>
+                        <div style={approvalCardStyle}>
+                          {shotApproval?.url ? <img src={shotApproval.url} alt={`${shot.sectionLabel} approval`} style={approvalImageStyle} /> : <div style={approvalPlaceholderStyle}>No shot image generated yet.</div>}
+                          <div style={approvalActionsStyle}>
+                            <button type="button" className="btn primary" disabled={!!busy} onClick={() => void generateApprovalVisual(`shot:${shot.clipId}`, `${shot.prompt}. Continuity: ${shot.continuityNotes}. Transition: ${shot.transition}.`, resolveReferenceUrl(shot.conditioningReferenceId) || characterImageUrl || undefined)}>
+                              {shotApproval?.url ? "Regenerate shot" : "Generate shot image"}
+                            </button>
+                            {shotApproval?.url && <button type="button" className="btn" onClick={() => setVisualApproval(`shot:${shot.clipId}`, { ...shotApproval, approved: true })}>{shotApproval.approved ? "Shot approved ✓" : "Approve shot"}</button>}
+                          </div>
+                        </div>
                         <Field label="Section label" value={shot.sectionLabel} onChange={(value) => updateShot(shot.clipId, { sectionLabel: value })} singleLine />
                         <label style={checkStyle}>
-                          <input type="checkbox" checked={shot.requiresCharacter} onChange={(event) => updateShot(shot.clipId, {
-                            requiresCharacter: event.target.checked,
-                            conditioningReferenceId: event.target.checked
-                              ? shot.conditioningReferenceId ?? session.plan?.characterBible.referenceId ?? null
-                              : shot.conditioningReferenceId,
-                          })} />
+                          <input type="checkbox" checked={shot.requiresCharacter} onChange={(event) => updateShot(shot.clipId, { requiresCharacter: event.target.checked, conditioningReferenceId: event.target.checked ? shot.conditioningReferenceId ?? session.plan?.characterBible.referenceId ?? null : shot.conditioningReferenceId })} />
                           <span>Principal character appears in this clip</span>
                         </label>
                         <label style={fieldStyle}>
@@ -563,10 +685,8 @@ export function LtxDirectorAgent() {
                   })}
                 </div>
                 <div style={actionRowStyle}>
-                  <button type="button" className="btn primary" disabled={!!busy} onClick={validateAndApplyPlan}>
-                    {session.planAccepted ? "Plan attached ✓" : "Accept edited plan and build timeline"}
-                  </button>
-                  <button type="button" className="btn" disabled={!!busy} onClick={startProduction}>Start conditioned LTX production</button>
+                  <button type="button" className="btn primary" disabled={!!busy} onClick={validateAndApplyPlan}>{session.planAccepted ? "Plan attached ✓" : "Accept edited plan and build timeline"}</button>
+                  <button type="button" className="btn" disabled={!!busy || !session.characterApproved || !session.visualApprovals.treatment?.approved || !session.visualApprovals.world?.approved || !session.plan.shots.every((shot) => session.visualApprovals[`shot:${shot.clipId}`]?.approved)} onClick={startProduction}>Start conditioned LTX production</button>
                   {clipProgress.failed > 0 && <button type="button" className="btn" onClick={retryFailed}>Retry failed clips</button>}
                 </div>
               </section>
@@ -578,27 +698,11 @@ export function LtxDirectorAgent() {
   );
 }
 
-function Field({
-  label,
-  value,
-  onChange,
-  placeholder,
-  singleLine = false,
-  tall = false,
-}: {
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-  placeholder?: string;
-  singleLine?: boolean;
-  tall?: boolean;
-}) {
+function Field({ label, value, onChange, placeholder, singleLine = false, tall = false }: { label: string; value: string; onChange: (value: string) => void; placeholder?: string; singleLine?: boolean; tall?: boolean }) {
   return (
     <label style={fieldStyle}>
       <span style={{ display: "flex", justifyContent: "space-between", gap: 10 }}><span>{label}</span>{!singleLine && <span>No character limit</span>}</span>
-      {singleLine
-        ? <input value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} style={inputStyle} />
-        : <textarea value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} style={{ ...textareaStyle, minHeight: tall ? 180 : 92 }} />}
+      {singleLine ? <input value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} style={inputStyle} /> : <textarea value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} style={{ ...textareaStyle, minHeight: tall ? 180 : 92 }} />}
     </label>
   );
 }
@@ -631,5 +735,10 @@ const modelBadgeStyle: CSSProperties = { display: "inline-block", marginTop: 10,
 const shotGridStyle: CSSProperties = { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(330px,1fr))", gap: 15, marginTop: 17 };
 const shotCardStyle: CSSProperties = { padding: 14, border: "1px solid rgba(255,255,255,.13)", borderRadius: 13, background: "rgba(255,255,255,.025)" };
 const shotHeaderStyle: CSSProperties = { display: "flex", justifyContent: "space-between", gap: 10, alignItems: "baseline" };
+const approvalCardStyle: CSSProperties = { marginTop: 14, padding: 12, borderRadius: 13, border: "1px solid rgba(255,255,255,.13)", background: "rgba(255,255,255,.025)" };
+const approvalImageStyle: CSSProperties = { display: "block", width: "100%", maxHeight: 360, objectFit: "cover", borderRadius: 10, background: "#111" };
+const approvalPlaceholderStyle: CSSProperties = { display: "grid", placeItems: "center", minHeight: 180, borderRadius: 10, background: "rgba(255,255,255,.04)", color: "#a1a1aa" };
+const approvalActionsStyle: CSSProperties = { display: "flex", flexWrap: "wrap", gap: 9, alignItems: "center", marginTop: 10 };
+const approvalStatusStyle: CSSProperties = { color: "#86efac", fontSize: 12, fontWeight: 700, marginRight: "auto" };
 const blockingStyle: CSSProperties = { marginTop: 10, padding: 9, borderRadius: 8, background: "rgba(239,68,68,.12)", color: "#fca5a5", fontSize: 12 };
 const countStyle: CSSProperties = { marginTop: 6, textAlign: "right", fontSize: 10 };
