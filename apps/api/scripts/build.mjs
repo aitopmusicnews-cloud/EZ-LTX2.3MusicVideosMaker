@@ -84,6 +84,10 @@ if (directorDist.includes(oldErrorParser)) {
   directorDist = directorDist.replace(oldErrorParser, detailedErrorParser);
 }
 
+// Long clip-by-clip plans can legitimately take more than three minutes. Render
+// allows much longer HTTP responses, so give Gemini up to ten minutes per call.
+directorDist = directorDist.replace(/AbortSignal\.timeout\(180_000\)/g, "AbortSignal.timeout(600_000)");
+
 if (directorDist.includes("temperature: 0.35")) {
   throw new Error("Gemini Director build still contains deprecated temperature configuration.");
 }
@@ -95,6 +99,12 @@ for (const forbidden of ["responseFormat:", "responseMimeType:", "responseJsonSc
 if (!directorDist.includes("Match this JSON Schema exactly")) {
   throw new Error("Gemini Director build is missing the schema-in-prompt contract.");
 }
+if (directorDist.includes("AbortSignal.timeout(180_000)")) {
+  throw new Error("Gemini Director build still contains the old three-minute timeout.");
+}
+if (!directorDist.includes("AbortSignal.timeout(600_000)")) {
+  throw new Error("Gemini Director build is missing the ten-minute planning timeout.");
+}
 
 await writeFile(directorDistPath, directorDist, "utf8");
-console.log("[api build] Compiled API with prompt-constrained Gemini Director JSON and server-side validation.");
+console.log("[api build] Compiled API with prompt-constrained Gemini Director JSON and a ten-minute planning timeout.");
