@@ -12,29 +12,37 @@ function run(command, args) {
 
 await run("tsc", ["-p", "tsconfig.json"]);
 
-// Gemini 3.6 Flash generateContent uses responseFormat for structured output.
-// In the raw REST proto, TextResponseFormat.mimeType is an enum, so JSON must
-// be sent as APPLICATION_JSON rather than the literal string application/json.
+// Gemini 3.6 Flash requires deprecated sampling parameters such as temperature
+// to be omitted. Structured output should follow the current raw REST contract.
 const directorDistPath = resolve(process.cwd(), "dist/director_agent.js");
 let directorDist = await readFile(directorDistPath, "utf8");
 
-const legacyConfig = `responseMimeType: "application/json",
+directorDist = directorDist.replace(/\s*temperature:\s*0\.35,\s*/g, "\n");
+
+const legacyStructuredOutput = `responseMimeType: "application/json",
                 responseJsonSchema: RESPONSE_SCHEMA,`;
-const currentConfig = `responseFormat: {
+const enumStructuredOutput = `responseFormat: {
                     text: {
                         mimeType: "APPLICATION_JSON",
                         schema: RESPONSE_SCHEMA,
                     },
                 },`;
+const officialStructuredOutput = `responseFormat: {
+                    text: {
+                        mimeType: "application/json",
+                        schema: RESPONSE_SCHEMA,
+                    },
+                },`;
 
-if (directorDist.includes(legacyConfig)) {
-  directorDist = directorDist.replace(legacyConfig, currentConfig);
-} else if (!directorDist.includes('mimeType: "APPLICATION_JSON"')) {
+if (directorDist.includes(legacyStructuredOutput)) {
+  directorDist = directorDist.replace(legacyStructuredOutput, officialStructuredOutput);
+} else if (directorDist.includes(enumStructuredOutput)) {
+  directorDist = directorDist.replace(enumStructuredOutput, officialStructuredOutput);
+} else if (!directorDist.includes('mimeType: "application/json"')) {
   throw new Error("Could not find the compiled Gemini Director structured-output configuration.");
 }
 
-// Preserve Google's error details. The API often places the useful field-level
-// reason in error.details while error.message is only "Request contains an invalid argument.".
+// Preserve Google's full error payload when request validation fails.
 const oldErrorParser = `let message = text;
         try {
             message = JSON.parse(text)?.error?.message ?? text;
@@ -60,5 +68,9 @@ if (directorDist.includes(oldErrorParser)) {
   directorDist = directorDist.replace(oldErrorParser, detailedErrorParser);
 }
 
+if (directorDist.includes("temperature: 0.35")) {
+  throw new Error("Gemini Director build still contains deprecated temperature configuration.");
+}
+
 await writeFile(directorDistPath, directorDist, "utf8");
-console.log("[api build] Compiled API with Gemini 3.6 responseFormat structured output.");
+console.log("[api build] Compiled API with Gemini 3.6-compatible Director request.");
