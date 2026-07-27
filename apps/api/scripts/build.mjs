@@ -53,7 +53,7 @@ if (directorDist.includes(oldPartsInit)) {
 
 // Accept a fenced JSON response defensively even though the prompt forbids it.
 const oldJsonParse = `parsedJson = JSON.parse(responseText);`;
-const tolerantJsonParse = `parsedJson = JSON.parse(responseText.replace(/^\\`\\`\\`(?:json)?\\s*/i, "").replace(/\\s*\\`\\`\\`$/, "").trim());`;
+const tolerantJsonParse = 'parsedJson = JSON.parse(responseText.replace(/^```(?:json)?\\s*/i, "").replace(/\\s*```$/, "").trim());';
 if (directorDist.includes(oldJsonParse)) {
   directorDist = directorDist.replace(oldJsonParse, tolerantJsonParse);
 }
