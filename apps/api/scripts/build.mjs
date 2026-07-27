@@ -2,7 +2,6 @@ import { spawn } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { patchDirectorAgentNormalization } from "./director-agent-normalize-patch.mjs";
 
 const apiRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const serverPath = resolve(apiRoot, "src/server.ts");
@@ -44,7 +43,7 @@ app.post("/api/director/plan", { config: { rateLimit: { max: 6, timeWindow: "1 m
     return reply.send(await createDirectorPlan(req.body));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    const status = error instanceof z.ZodError ? 400 : message.includes("GEMINI_API_KEY") ? 503 : message.includes("Character conditioning") || message.includes("character reference") ? 409 : 500;
+    const status = message.includes("GEMINI_API_KEY") ? 503 : message.includes("Character conditioning") || message.includes("character reference") ? 409 : 500;
     req.log.error({ err: error }, "LTX Director Agent failed");
     return reply.code(status).send({ error: message });
   }
@@ -90,13 +89,16 @@ if (!patchedModalAi.includes(characterValidationMarker)) {
   console.log("[api build] Character conditioning validation already present; skipped legacy character patch.");
 }
 
-const patchedDirectorAgent = patchDirectorAgentNormalization(originalDirectorAgent, replaceRequired);
+// The Director agent is now maintained directly in source. Do not apply the
+// old build-time normalization patch: it rewrote internal function signatures
+// and caused TypeScript errors when the source evolved.
+const patchedDirectorAgent = originalDirectorAgent;
 
 try {
   await writeFile(serverPath, patchedServer, "utf8");
   await writeFile(modalAiPath, patchedModalAi, "utf8");
   await writeFile(directorAgentPath, patchedDirectorAgent, "utf8");
-  console.log("[api build] Wired Gemini LTX Director route, normalized creative plans, app validation, and strict character conditioning.");
+  console.log("[api build] Wired Gemini LTX Director route and strict character conditioning without legacy Director source rewriting.");
   await run("tsc", ["-p", "tsconfig.json"]);
 } finally {
   await writeFile(serverPath, originalServer, "utf8");
