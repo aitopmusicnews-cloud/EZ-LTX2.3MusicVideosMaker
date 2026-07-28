@@ -24,8 +24,9 @@ export function DirectorSectionReview({ songId, plan, disabled = false, onGenera
     return { shot, clip, approved };
   }), [plan.shots, clips, approvals]);
   const approvedCount = rows.filter((row) => row.approved).length;
+  const activeGeneration = rows.find((row) => row.clip?.status === "queued" || row.clip?.status === "generating");
   const blockingReview = rows.find((row) => row.clip?.status === "ready" && row.clip.videoUrl && !row.approved);
-  const nextToGenerate = blockingReview ? null : rows.find((row) => !row.approved && row.clip?.status !== "queued" && row.clip?.status !== "generating");
+  const nextToGenerate = activeGeneration || blockingReview ? null : rows.find((row) => !row.approved && row.clip?.status !== "queued" && row.clip?.status !== "generating");
 
   const playOnTimeline = (clipId: string, start: number) => {
     selectClip(clipId); setPlayhead(start);
@@ -40,19 +41,28 @@ export function DirectorSectionReview({ songId, plan, disabled = false, onGenera
     el?.scrollIntoView({ behavior: "smooth", block: "center" });
   };
 
+  const guardMessage = activeGeneration
+    ? `Generating ${activeGeneration.shot.sectionLabel}. No other Director section can start until this job finishes.`
+    : blockingReview
+      ? `Review ${blockingReview.shot.sectionLabel} before generating another section.`
+      : nextToGenerate
+        ? `Next: ${nextToGenerate.shot.sectionLabel}`
+        : "All generated sections are approved.";
+
   return <section style={sectionStyle}>
-    <div style={headerStyle}><div><h3 style={titleStyle}>Section-by-section preview & approval</h3><p style={helpStyle}>Director spends video credits on one analyzer-defined section at a time. Watch it on the timeline, chat changes, regenerate only that section, then approve before moving on.</p></div><strong style={badgeStyle}>{approvedCount}/{rows.length} approved</strong></div>
-    <div style={guardStyle}>{blockingReview ? `Review ${blockingReview.shot.sectionLabel} before generating another section.` : nextToGenerate ? `Next: ${nextToGenerate.shot.sectionLabel}` : "All generated sections are approved."}</div>
-    <button type="button" className="btn primary" disabled={disabled || !nextToGenerate} onClick={() => nextToGenerate && void onGenerate(nextToGenerate.shot.clipId)}>{nextToGenerate ? `Generate next section — ${nextToGenerate.shot.sectionLabel}` : "Approve the current section to continue"}</button>
+    <div style={headerStyle}><div><h3 style={titleStyle}>Section-by-section preview & approval</h3><p style={helpStyle}>Director spends video credits on one analyzer-defined section at a time. Gemini translates the approved section into the LTXDirector node timeline, then you watch it, chat changes, regenerate only that section, and approve before moving on.</p></div><strong style={badgeStyle}>{approvedCount}/{rows.length} approved</strong></div>
+    <div style={guardStyle}>{guardMessage}</div>
+    <button type="button" className="btn primary" disabled={disabled || !nextToGenerate} onClick={() => nextToGenerate && void onGenerate(nextToGenerate.shot.clipId)}>{activeGeneration ? `Generating ${activeGeneration.shot.sectionLabel}…` : nextToGenerate ? `Generate next section — ${nextToGenerate.shot.sectionLabel}` : "Approve the current section to continue"}</button>
     <div style={gridStyle}>{rows.map(({ shot, clip, approved }) => {
       const busy = clip?.status === "queued" || clip?.status === "generating";
       const ready = clip?.status === "ready" && Boolean(clip.videoUrl);
+      const anotherBusy = Boolean(activeGeneration && activeGeneration.shot.clipId !== shot.clipId);
       return <article key={shot.clipId} style={{ ...cardStyle, borderColor: approved ? "rgba(34,197,94,.5)" : "rgba(255,255,255,.13)" }}>
         <div style={rowStyle}><strong>{shot.sectionLabel}</strong><span style={smallStyle}>{time(shot.start)}–{time(shot.end)} · {(shot.end - shot.start).toFixed(1)}s</span></div>
         <div style={smallStyle}>{shot.clipId} · {clip?.status ?? "missing"}</div>
-        {ready && clip?.videoUrl ? <video src={clip.videoUrl} controls preload="metadata" style={videoStyle} /> : <div style={placeholderStyle}>{busy ? "Generating this section…" : clip?.status === "failed" ? clip.lastError || "Generation failed" : "No video preview yet."}</div>}
+        {ready && clip?.videoUrl ? <video src={clip.videoUrl} controls preload="metadata" style={videoStyle} /> : <div style={placeholderStyle}>{busy ? "LTXDirector is generating this section…" : clip?.status === "failed" ? clip.lastError || "Generation failed" : "No video preview yet."}</div>}
         <div style={actionsStyle}>
-          <button type="button" className="btn" disabled={disabled || busy} onClick={() => void onGenerate(shot.clipId)}>{ready ? "Regenerate this section" : clip?.status === "failed" ? "Retry this section" : "Generate this section"}</button>
+          <button type="button" className="btn" disabled={disabled || busy || anotherBusy || Boolean(blockingReview && blockingReview.shot.clipId !== shot.clipId)} onClick={() => void onGenerate(shot.clipId)}>{ready ? "Regenerate this section" : clip?.status === "failed" ? "Retry this section" : "Generate this section"}</button>
           {ready && clip?.videoUrl && <button type="button" className="btn" onClick={() => playOnTimeline(shot.clipId, shot.start)}>▶ Play on timeline</button>}
           {ready && clip?.videoUrl && <button type="button" className="btn primary" onClick={() => approve(shot.clipId, clip.videoUrl!)}>{approved ? "Approved ✓" : "Approve section"}</button>}
           <button type="button" className="btn ghost" onClick={() => revise(shot.clipId)}>Chat changes</button>
