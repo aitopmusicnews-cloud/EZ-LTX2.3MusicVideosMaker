@@ -2,7 +2,7 @@ export function patchDirectorChat(source, replaceRequired) {
   let patched = source;
 
   const apiImport = 'import { startTextToImage, pollTask, saveImageToLibrary } from "../lib/api.js";';
-  const chatImport = `${apiImport}\nimport { DirectorEditChat, type DirectorEditAction } from "./DirectorEditChat.js";`;
+  const chatImport = `${apiImport}\nimport { DirectorEditChat, type DirectorEditAction } from "./DirectorEditChat.js";\nimport { DirectorSectionReview } from "./DirectorSectionReview.js";\nimport { DirectorAssetsPanel } from "./DirectorAssetsPanel.js";`;
   if (!patched.includes('from "./DirectorEditChat.js"')) {
     patched = replaceRequired(patched, apiImport, chatImport, "Director edit chat import");
   }
@@ -13,7 +13,40 @@ export function patchDirectorChat(source, replaceRequired) {
   };
 `;
 
-  const chatActionHelpers = `${visualHelpersAnchor}
+  const workflowHelpers = `${visualHelpersAnchor}
+  const generateSectionPreview = (clipId: string) => {
+    const shot = session.plan?.shots.find((item) => item.clipId === clipId);
+    const timelineClips = useStore.getState().clips;
+    const clipIndex = timelineClips.findIndex((item) => item.id === clipId);
+    const clip = clipIndex >= 0 ? timelineClips[clipIndex] : undefined;
+    if (!shot || !clip) { setError(\`Could not find section \${clipId} on the timeline.\`); return; }
+    const conditioningUrl = resolveReferenceUrl(shot.conditioningReferenceId) || undefined;
+    if (shot.requiresCharacter && !conditioningUrl) { setError(\`\${shot.sectionLabel} needs a character asset before video generation.\`); return; }
+    const previousReady = clipIndex > 0 && timelineClips[clipIndex - 1]?.status === "ready" && Boolean(timelineClips[clipIndex - 1]?.videoUrl);
+    const source = conditioningUrl ? "imageToVideo" : previousReady ? "continue" : "textToVideo";
+    updateClip(clip.id, {
+      prompt: shot.prompt,
+      sectionLabel: shot.sectionLabel,
+      seedImageUrl: conditioningUrl,
+      archetypeUrl: conditioningUrl,
+      source,
+      model: "ltx-video",
+      lastError: undefined,
+    });
+    (enqueueGeneration as any)({
+      clipId: clip.id,
+      source,
+      seedImageUrl: conditioningUrl || "",
+      requiresCharacter: shot.requiresCharacter,
+      prompt: shot.prompt,
+      duration: clip.end - clip.start,
+      sectionLabel: shot.sectionLabel,
+      energy: 0.65,
+      model: "ltx-video",
+    });
+    toast.success(\`Generating only \${shot.sectionLabel}. Review and approve it before moving on.\`);
+  };
+
   const applyDirectorChatActions = async (actions: DirectorEditAction[]) => {
     if (!session.plan) return;
     for (const action of actions) {
@@ -44,10 +77,13 @@ export function patchDirectorChat(source, replaceRequired) {
         if (action.regenerate) {
           const clip = useStore.getState().clips.find((item) => item.id === action.clipId);
           if (clip) {
+            const clipIndex = useStore.getState().clips.findIndex((item) => item.id === action.clipId);
+            const previousReady = clipIndex > 0 && useStore.getState().clips[clipIndex - 1]?.status === "ready" && Boolean(useStore.getState().clips[clipIndex - 1]?.videoUrl);
+            const source = conditioningUrl ? "imageToVideo" : previousReady ? "continue" : "textToVideo";
             (enqueueGeneration as any)({
               clipId: clip.id,
-              source: conditioningUrl ? "imageToVideo" : "textToVideo",
-              seedImageUrl: conditioningUrl,
+              source,
+              seedImageUrl: conditioningUrl || "",
               requiresCharacter: nextShot.requiresCharacter,
               prompt: nextShot.prompt,
               duration: clip.end - clip.start,
@@ -71,23 +107,36 @@ export function patchDirectorChat(source, replaceRequired) {
   };
 `;
 
-  if (!patched.includes("const applyDirectorChatActions = async")) {
-    patched = replaceRequired(patched, visualHelpersAnchor, chatActionHelpers, "Director chat action handler");
+  if (!patched.includes("const generateSectionPreview =")) {
+    patched = replaceRequired(patched, visualHelpersAnchor, workflowHelpers, "Director section preview and chat action handlers");
   }
 
   const assetStrip = `      <div style={assetStripStyle}><div><strong>{characterImageUrl || characterReferences.length ? "Character conditioning ready" : "No character conditioning"}</strong><div style={smallStyle}>{characterReferences.length} uploaded character reference{characterReferences.length === 1 ? "" : "s"} · {readyReferences.length} total inputs</div></div><button type="button" className="btn ghost" onClick={() => window.dispatchEvent(new CustomEvent("mvs-open-reference-chat"))}>Use ＋ References</button></div>`;
-  const chatPanel = `${assetStrip}
-      {session.plan && <DirectorEditChat
-        plan={session.plan}
-        references={readyReferences.map((reference) => ({ id: reference.id, kind: reference.kind, name: reference.name, note: reference.note, anchorUrl: reference.anchorUrl ?? (reference.media === "image" ? reference.url : undefined) }))}
-        sceneImages={Object.fromEntries(Object.entries(session.sceneApprovals).filter(([, value]) => Boolean(value?.url)).map(([key, value]) => [key, value.url]))}
-        shotImages={Object.fromEntries(Object.entries(session.shotApprovals).filter(([, value]) => Boolean(value?.url)).map(([key, value]) => [key, value.url]))}
-        disabled={!!busy}
-        onApply={applyDirectorChatActions}
-      />}`;
-  if (!patched.includes("Director chat — adjust clips & images")) {
-    patched = replaceRequired(patched, assetStrip, chatPanel, "Director chat panel");
+  const workflowPanel = `${assetStrip}
+      {session.plan && <>
+        <DirectorAssetsPanel
+          references={readyReferences.map((reference) => ({ id: reference.id, kind: reference.kind, media: reference.media, name: reference.name, url: reference.url, anchorUrl: reference.anchorUrl ?? (reference.media === "image" ? reference.url : undefined), note: reference.note }))}
+          sceneImages={Object.fromEntries(Object.entries(session.sceneApprovals).filter(([, value]) => Boolean(value?.url)).map(([key, value]) => [key, value.url]))}
+          shotImages={Object.fromEntries(Object.entries(session.shotApprovals).filter(([, value]) => Boolean(value?.url)).map(([key, value]) => [key, value.url]))}
+        />
+        <DirectorEditChat
+          plan={session.plan}
+          references={readyReferences.map((reference) => ({ id: reference.id, kind: reference.kind, media: reference.media, name: reference.name, note: reference.note, anchorUrl: reference.anchorUrl ?? (reference.media === "image" ? reference.url : undefined) }))}
+          sceneImages={Object.fromEntries(Object.entries(session.sceneApprovals).filter(([, value]) => Boolean(value?.url)).map(([key, value]) => [key, value.url]))}
+          shotImages={Object.fromEntries(Object.entries(session.shotApprovals).filter(([, value]) => Boolean(value?.url)).map(([key, value]) => [key, value.url]))}
+          disabled={!!busy}
+          onApply={applyDirectorChatActions}
+        />
+        <DirectorSectionReview songId={songId} plan={session.plan} disabled={!!busy} onGenerate={generateSectionPreview} />
+      </>}`;
+  if (!patched.includes("DirectorSectionReview songId")) {
+    patched = replaceRequired(patched, assetStrip, workflowPanel, "Director assets, chat, and section approval panels");
   }
+
+  const bulkStart = `<button type="button" className="btn" disabled={!!busy || !session.characterApproved || !session.treatmentApproved || !session.plan.shots.every((shot) => session.sceneApprovals[shot.clipId]?.approved) || !session.plan.shots.every((shot) => session.shotApprovals[shot.clipId]?.approved)} onClick={startProduction}>Start conditioned LTX production</button>`;
+  if (patched.includes(bulkStart)) patched = patched.replace(bulkStart, `<button type="button" className="btn" disabled title="Credit protection: generate and approve one section at a time above.">Section-by-section generation enabled</button>`);
+  const bulkRetry = `{clipProgress.failed > 0 && <button type="button" className="btn" onClick={retryFailed}>Retry failed clips</button>}`;
+  if (patched.includes(bulkRetry)) patched = patched.replace(bulkRetry, "");
 
   return patched;
 }
