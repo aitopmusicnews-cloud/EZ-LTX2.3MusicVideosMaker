@@ -113,11 +113,17 @@ app.post("/api/videos/stitch", { config: { rateLimit: { max: 20, timeWindow: "1 
     const { stitchVideoSegments } = await import("./video_stitch.js");
     return reply.send(await stitchVideoSegments(body.projectId, body.videos));
 });
+app.post("/api/social/export", { config: { rateLimit: { max: 12, timeWindow: "1 minute" } } }, async (req, reply) => {
+    const body = z.object({ projectId: SafeId, videoUrl: z.string().min(1), preset: z.enum(["vertical", "square", "landscape"]) }).parse(req.body);
+    const { exportSocialVideo } = await import("./social_export.js");
+    return reply.send(await exportSocialVideo(body.projectId, body.videoUrl, body.preset));
+});
 ${routeAnchor}`;
   serverDist = serverDist.replace(routeAnchor, routes);
 }
 if (!serverDist.includes('/api/director/chat')) throw new Error("Compiled API is missing /api/director/chat.");
 if (!serverDist.includes('/api/videos/stitch')) throw new Error("Compiled API is missing /api/videos/stitch.");
+if (!serverDist.includes('/api/social/export')) throw new Error("Compiled API is missing /api/social/export.");
 await writeFile(serverDistPath, serverDist, "utf8");
 
-console.log("[api build] Compiled Director planning/chat, analyzer-length sections, long-section stitching, and ten-minute planning timeout.");
+console.log("[api build] Compiled Director planning/chat, analyzer-length sections, long-section stitching, social exports, and ten-minute planning timeout.");
