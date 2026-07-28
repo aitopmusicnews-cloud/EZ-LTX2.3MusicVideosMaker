@@ -133,8 +133,16 @@ export function patchDirectorChat(source, replaceRequired) {
     patched = replaceRequired(patched, assetStrip, workflowPanel, "Director assets, chat, and section approval panels");
   }
 
-  const bulkStart = `<button type="button" className="btn" disabled={!!busy || !session.characterApproved || !session.treatmentApproved || !session.plan.shots.every((shot) => session.sceneApprovals[shot.clipId]?.approved) || !session.plan.shots.every((shot) => session.shotApprovals[shot.clipId]?.approved)} onClick={startProduction}>Start conditioned LTX production</button>`;
-  if (patched.includes(bulkStart)) patched = patched.replace(bulkStart, `<button type="button" className="btn" disabled title="Credit protection: generate and approve one section at a time above.">Section-by-section generation enabled</button>`);
+  const startMarker = " onClick={startProduction}>";
+  const startMarkerIndex = patched.indexOf(startMarker);
+  if (startMarkerIndex >= 0) {
+    const buttonStart = patched.lastIndexOf('<button type="button"', startMarkerIndex);
+    const buttonEnd = patched.indexOf("</button>", startMarkerIndex);
+    if (buttonStart < 0 || buttonEnd < 0) throw new Error("Could not replace bulk Director production button.");
+    patched = patched.slice(0, buttonStart) + `<button type="button" className="btn" disabled title="Credit protection: generate and approve one section at a time above.">Section-by-section generation enabled</button>` + patched.slice(buttonEnd + "</button>".length);
+  }
+  if (patched.includes(startMarker)) throw new Error("Bulk Director production button is still enabled.");
+
   const bulkRetry = `{clipProgress.failed > 0 && <button type="button" className="btn" onClick={retryFailed}>Retry failed clips</button>}`;
   if (patched.includes(bulkRetry)) patched = patched.replace(bulkRetry, "");
 
