@@ -16,9 +16,11 @@ export function patchDirectorChat(source, replaceRequired) {
     if (!plan || !shot || !clip) { setError(\`Could not find section \${clipId} on the timeline.\`); return; }
     if (!session.treatmentApproved) { setError("Approve the treatment before spending video credits on a section."); return; }
     if (!session.sceneApprovals[clipId]?.approved) { setError(\`Approve the scene image for \${shot.sectionLabel} before generating video.\`); return; }
-    if (!session.shotApprovals[clipId]?.approved) { setError(\`Approve the shot image for \${shot.sectionLabel} before generating video.\`); return; }
-    const conditioningUrl = resolveReferenceUrl(shot.conditioningReferenceId) || undefined;
-    if (shot.requiresCharacter && !conditioningUrl) { setError(\`\${shot.sectionLabel} needs a character asset before video generation.\`); return; }
+    const approvedShot = session.shotApprovals[clipId];
+    if (!approvedShot?.approved || !approvedShot.url) { setError(\`Approve the shot image for \${shot.sectionLabel} before generating video.\`); return; }
+    if (clip.status === "queued" || clip.status === "generating") { setError(\`\${shot.sectionLabel} is already generating. Keep chatting with Director while it finishes, then review it on the timeline.\`); return; }
+    const conditioningUrl = approvedShot.url || resolveReferenceUrl(shot.conditioningReferenceId) || undefined;
+    if (shot.requiresCharacter && !conditioningUrl) { setError(\`\${shot.sectionLabel} needs an approved shot image or character asset before video generation.\`); return; }
     const anotherActive = timelineClips.some((item) => item.id !== clipId && (item.status === "queued" || item.status === "generating"));
     if (anotherActive) { setError("Another Director section is already generating. Finish and review it before starting another."); return; }
 
@@ -43,7 +45,7 @@ export function patchDirectorChat(source, replaceRequired) {
       sectionLabel: shot.sectionLabel,
       seedImageUrl: conditioningUrl,
       archetypeUrl: conditioningUrl,
-      source: conditioningUrl ? "imageToVideo" : "textToVideo",
+      source: "imageToVideo",
       model: "ltx-director",
       status: "generating",
       videoUrl: undefined,
@@ -63,7 +65,7 @@ export function patchDirectorChat(source, replaceRequired) {
         fps: 24,
       });
       updateClip(clip.id, { generationTaskId: task.id });
-      toast.success(\`LTXDirector is producing only \${shot.sectionLabel}. Review it before moving on.\`);
+      toast.success(\`LTXDirector is rendering only \${shot.sectionLabel} from its approved shot image. You can keep chatting while it renders.\`);
 
       const final = await pollTask(task.id, 5000, 1_800_000);
       const videoUrl = final.outputUrl || (Array.isArray(final.output) ? final.output[0] : final.output?.videoUrl ?? final.output?.url);
@@ -76,14 +78,14 @@ export function patchDirectorChat(source, replaceRequired) {
         id: clip.id,
         name: shot.prompt.slice(0, 60) || \`\${shot.sectionLabel} Director section\`,
         videoUrl,
-        source: conditioningUrl ? "imageToVideo" : "textToVideo",
+        source: "imageToVideo",
         prompt: shot.prompt,
         duration: clip.end - clip.start,
         sectionLabel: shot.sectionLabel,
         model: "ltx-director",
         generationTaskId: task.id,
       }).catch((failure) => console.warn("Director section auto-save failed", failure));
-      toast.success(\`\${shot.sectionLabel} is ready to watch and approve.\`);
+      toast.success(\`\${shot.sectionLabel} is on the timeline and ready to preview. Approve it before moving on.\`);
     } catch (failure) {
       const message = failure instanceof Error ? failure.message : String(failure);
       updateClip(clip.id, { status: "failed", lastError: message });
@@ -120,13 +122,17 @@ export function patchDirectorChat(source, replaceRequired) {
         });
 
         if (action.regenerate) {
-          const visualChanged = action.prompt !== undefined || action.continuityNotes !== undefined || action.transition !== undefined || action.requiresCharacter !== undefined || action.conditioningReferenceId !== undefined;
-          if (visualChanged) {
-            const imagePrompt = \`\${nextShot.prompt}. Continuity: \${nextShot.continuityNotes}. Transition: \${nextShot.transition}.\`;
-            await generateShotVisual(action.clipId, imagePrompt, conditioningUrl || characterImageUrl || undefined);
-            toast.success(\`Director updated \${action.clipId} and made a new shot image. Approve that image before regenerating video.\`);
+          if (busy) {
+            toast.success(\`Director saved the change for \${action.clipId}. Finish the current approval-image render, then regenerate this shot.\`);
           } else {
-            await generateSectionPreview(action.clipId);
+            const visualChanged = action.prompt !== undefined || action.continuityNotes !== undefined || action.transition !== undefined || action.requiresCharacter !== undefined || action.conditioningReferenceId !== undefined;
+            if (visualChanged) {
+              const imagePrompt = \`\${nextShot.prompt}. Continuity: \${nextShot.continuityNotes}. Transition: \${nextShot.transition}.\`;
+              await generateShotVisual(action.clipId, imagePrompt, conditioningUrl || characterImageUrl || undefined);
+              toast.success(\`Director updated \${action.clipId} and made a new shot image. Approve that image before regenerating video.\`);
+            } else {
+              await generateSectionPreview(action.clipId);
+            }
           }
         } else {
           toast.success(\`Director updated \${action.clipId}\`);
@@ -134,6 +140,10 @@ export function patchDirectorChat(source, replaceRequired) {
         continue;
       }
 
+      if (busy) {
+        toast.success(\`Director understood the image edit for \${action.clipId}. Finish the current image render, then send/regenerate that image edit so we never overlap generation jobs.\`);
+        continue;
+      }
       const existingImage = action.type === "edit_scene_image"
         ? session.sceneApprovals[action.clipId]?.url
         : session.shotApprovals[action.clipId]?.url;
@@ -163,7 +173,7 @@ export function patchDirectorChat(source, replaceRequired) {
           references={readyReferences.map((reference) => ({ id: reference.id, kind: reference.kind, media: reference.media, name: reference.name, note: reference.note, anchorUrl: reference.anchorUrl ?? (reference.media === "image" ? reference.url : undefined) }))}
           sceneImages={Object.fromEntries(Object.entries(session.sceneApprovals).filter(([, value]) => Boolean(value?.url)).map(([key, value]) => [key, value.url]))}
           shotImages={Object.fromEntries(Object.entries(session.shotApprovals).filter(([, value]) => Boolean(value?.url)).map(([key, value]) => [key, value.url]))}
-          disabled={!!busy}
+          disabled={false}
           onApply={applyDirectorChatActions}
         />
         <DirectorSectionReview songId={songId} plan={session.plan} disabled={!!busy} onGenerate={generateSectionPreview} />
