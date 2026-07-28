@@ -34,7 +34,9 @@ export async function exportSocialVideo(
   if (!profile) throw new Error(`Unknown social export preset: ${preset}`);
 
   const local = resolveLocalPath(videoUrl);
-  if (!local && /^https?:\/\//i.test(videoUrl)) await assertSafeHost(videoUrl);
+  const isRemote = /^https?:\/\//i.test(videoUrl);
+  if (!local && !isRemote) throw new Error("Social export source must be an app-owned render URL or an HTTP(S) media URL.");
+  if (!local && isRemote) await assertSafeHost(videoUrl);
   const input = local ?? videoUrl;
 
   await mkdir(paths.RENDERS, { recursive: true });
