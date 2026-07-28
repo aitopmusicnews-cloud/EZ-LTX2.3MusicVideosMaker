@@ -9,6 +9,7 @@ import { patchOptionalCharacterConditioning } from "./optional-character-conditi
 import { patchDirectorChat } from "./director-chat-patch.mjs";
 import { patchAnalyzerDefinedClips, patchLongSectionApi, patchLongSectionScheduler } from "./analyzer-section-workflow.patch.mjs";
 import { patchDirectorAssetPersistence } from "./director-assets.patch.mjs";
+import { patchSocialExport } from "./social-export.patch.mjs";
 
 const webRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const sidebarPath = resolve(webRoot, "src/components/Sidebar.tsx");
@@ -56,6 +57,7 @@ if (!patchedDirector.includes('window.addEventListener("mvs-director-reference"'
 }
 patchedDirector = patchDirectorStatus(patchedDirector, replaceRequired);
 patchedDirector = patchDirectorEditing(patchedDirector, replaceRequired);
+patchedDirector = patchSocialExport(patchedDirector, replaceRequired);
 
 const oldApiErrorMessage = `    const msg = parsed?.error ?? text;\n    throw new ApiError(res.status, msg, parsed?.rateLimited === true);`;
 const safeApiErrorMessage = `    const isHtml = /<!doctype|<html/i.test(text.slice(0, 300));\n    const msg = parsed?.error ?? (isHtml\n      ? (res.status >= 500 ? "The Render service is temporarily unavailable. Please try again." : "The server returned an HTML error page instead of JSON.")\n      : text.slice(0, 500));\n    throw new ApiError(res.status, msg, parsed?.rateLimited === true);`;
@@ -84,6 +86,7 @@ try {
   }
   await writeFile(directorPath, patchedDirector, "utf8");
   console.log("[web build] Kept Director source build-compatible for saved sessions.");
+  console.log("[web build] Added social media export presets to the final-cut screen.");
   await writeFile(apiPath, patchedApi, "utf8");
   await writeFile(schedulerPath, patchedScheduler, "utf8");
   await writeFile(storePath, patchedStore, "utf8");
