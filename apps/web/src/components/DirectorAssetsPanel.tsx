@@ -24,6 +24,14 @@ export function DirectorAssetsPanel({ references, sceneImages, shotImages }: Pro
   ];
   const readyClips = clips.filter((clip) => clip.status === "ready" && clip.videoUrl);
 
+  const applyReference = (asset: RefAsset) => {
+    const anchorUrl = asset.anchorUrl ?? asset.url;
+    if (!anchorUrl) { toast.error("This asset does not have a usable visual reference."); return; }
+    const kind = asset.kind === "character" || asset.kind === "location" || asset.kind === "shot" ? asset.kind : "style";
+    const media = asset.media === "video" ? "video" : "image";
+    window.dispatchEvent(new CustomEvent("mvs-director-reference", { detail: { kind, media, name: asset.name || asset.id, url: anchorUrl, sourceUrl: asset.url, note: asset.note } }));
+    toast.success(`Using ${asset.name || asset.id} in Director`);
+  };
   const saveGeneratedImage = (label: string, url: string) => {
     saveAsset({ kind: "shot", media: "image", name: label, url, anchorUrl: url, note: "Approved/generated Director visual available for reuse." });
     toast.success("Saved to Director Assets");
@@ -42,7 +50,7 @@ export function DirectorAssetsPanel({ references, sceneImages, shotImages }: Pro
   return <section style={sectionStyle}>
     <div style={headerStyle}><div><h3 style={titleStyle}>Assets — reuse what already works</h3><p style={helpStyle}>Characters, wardrobe/look references, locations, props, generated images, and finished section clips can be kept here and reused by Director instead of recreated with more credits.</p></div><button type="button" className="btn ghost" onClick={() => window.dispatchEvent(new CustomEvent("mvs-open-reference-chat"))}>＋ Add asset</button></div>
     <div style={columnsStyle}>
-      <div><strong style={labelStyle}>Saved references</strong><div style={listStyle}>{references.length ? references.map((asset) => <div key={asset.id} style={itemStyle}><span><b>{asset.name || asset.id}</b><small style={smallStyle}>{asset.kind || "style"} · {asset.media || "image"}</small></span>{asset.anchorUrl && <img src={asset.anchorUrl} alt="" style={thumbStyle} />}</div>) : <div style={emptyStyle}>No reusable assets yet.</div>}</div></div>
+      <div><strong style={labelStyle}>Saved references</strong><div style={listStyle}>{references.length ? references.map((asset) => <div key={asset.id} style={itemStyle}><span><b>{asset.name || asset.id}</b><small style={smallStyle}>{asset.kind || "style"} · {asset.media || "image"}</small><button type="button" className="btn ghost" style={{ marginTop: 6 }} onClick={() => applyReference(asset)}>Use in Director</button></span>{asset.anchorUrl && <img src={asset.anchorUrl} alt="" style={thumbStyle} />}</div>) : <div style={emptyStyle}>No reusable assets yet.</div>}</div></div>
       <div><strong style={labelStyle}>Generated images</strong><div style={listStyle}>{generatedImages.length ? generatedImages.map((asset) => <div key={asset.id} style={itemStyle}><span><b>{asset.label}</b><button type="button" className="btn ghost" style={{ marginTop: 6 }} onClick={() => saveGeneratedImage(asset.label, asset.url)}>Save as asset</button></span><img src={asset.url} alt="" style={thumbStyle} /></div>) : <div style={emptyStyle}>Generated scene and shot images will appear here.</div>}</div></div>
       <div><strong style={labelStyle}>Generated section clips</strong><div style={listStyle}>{readyClips.length ? readyClips.map((clip) => <div key={clip.id} style={itemStyle}><span><b>{clip.sectionLabel || clip.id}</b><small style={smallStyle}>{(clip.end - clip.start).toFixed(1)}s · reusable clip</small><button type="button" className="btn ghost" style={{ marginTop: 6 }} disabled={saving === clip.id} onClick={() => void saveVideo(clip.id, clip.videoUrl!)}>{saving === clip.id ? "Saving…" : "Save clip as asset"}</button></span><video src={clip.videoUrl} muted preload="metadata" style={videoThumbStyle} /></div>) : <div style={emptyStyle}>Approved/generated section clips will appear here.</div>}</div></div>
     </div>
