@@ -19,6 +19,8 @@ const Env = z.object({
   MODAL_FILE_RESOLVER_URL: optionalUrl.optional(),
   MODAL_KEY: optionalNonEmpty.optional(),
   MODAL_SECRET: optionalNonEmpty.optional(),
+  LTX_DIRECTOR_URL: optionalUrl.optional(),
+  LTX_DIRECTOR_TOKEN: optionalNonEmpty.optional(),
   GEMINI_API_KEY: optionalNonEmpty.optional(),
   GEMINI_DIRECTOR_MODEL: z.string().trim().min(1).default("gemini-3.6-flash"),
   API_AUTH_TOKEN: optionalNonEmpty.optional(),
@@ -77,7 +79,10 @@ export const config = {
 };
 
 if (!config.MODAL_LTX_URL) {
-  console.log("INFO: MODAL_LTX_URL is missing. Video generation is offline.");
+  console.log("INFO: MODAL_LTX_URL is missing. Legacy video generation is offline.");
+}
+if (!config.LTX_DIRECTOR_URL) {
+  console.log("INFO: LTX_DIRECTOR_URL is missing. ComfyUI LTX Director section rendering is offline.");
 }
 if (!config.MODAL_AUDIO_URL) {
   console.log("INFO: MODAL_AUDIO_URL is missing. Music analysis is offline.");
