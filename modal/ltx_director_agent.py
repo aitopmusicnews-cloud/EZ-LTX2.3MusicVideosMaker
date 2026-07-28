@@ -19,7 +19,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 LOCAL_GPU_DIR = REPO_ROOT / "gpu"
 
 COMFY_ROOT = "/root/ComfyUI"
-COMFY_MODELS = f"{COMFY_ROOT}/models"
+COMFY_MODELS = "/models"
 COMFY_OUTPUT = f"{COMFY_ROOT}/output"
 DIRECTOR_OUTPUT = "/outputs"
 DIRECTOR_GPU = os.getenv("MVS_LTX_DIRECTOR_GPU", "A100-80GB")
@@ -167,6 +167,19 @@ class LTXDirectorGenerator:
                 "`modal run modal/ltx_director_agent.py::prepare_director_models` once before rendering. "
                 f"Missing: {', '.join(missing)}"
             )
+
+        # Modal Volumes cannot be mounted over ComfyUI's pre-populated models
+        # directory. Keep the Volume at /models and register it as an external
+        # model library using ComfyUI's supported extra_model_paths.yaml format.
+        extra_model_paths = Path(COMFY_ROOT) / "extra_model_paths.yaml"
+        extra_model_paths.write_text(
+            "mvs_modal:\n"
+            f"  base_path: {COMFY_MODELS}\n"
+            "  diffusion_models: diffusion_models\n"
+            "  vae: vae\n"
+            "  text_encoders: text_encoders\n",
+            encoding="utf-8",
+        )
 
         Path(COMFY_OUTPUT).mkdir(parents=True, exist_ok=True)
         log_path = Path("/tmp/comfyui-ltx-director.log")
