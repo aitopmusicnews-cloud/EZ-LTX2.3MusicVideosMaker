@@ -1,4 +1,4 @@
-import { useMemo, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
 
 export type DirectorEditAction =
   | {
@@ -28,12 +28,23 @@ type Props = {
 export function DirectorEditChat({ plan, references, sceneImages, shotImages, disabled = false, onApply }: Props) {
   const [draft, setDraft] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([
-    { role: "director", text: "Tell me what to change. You can name a clip ID/section, ask me to revise its prompt, regenerate that clip, or adjust a scene/shot image." },
+    { role: "director", text: "Tell me what to change. Name a section/clip, revise its prompt or image, add something, or ask to regenerate the approved section." },
   ]);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const history = useMemo(() => messages.slice(-10), [messages]);
+
+  useEffect(() => {
+    const focusFromSection = (event: Event) => {
+      const clipId = String((event as CustomEvent<{ clipId?: string }>).detail?.clipId ?? "").trim();
+      if (!clipId) return;
+      setDraft((current) => current.trim() ? current : `For ${clipId}, `);
+      requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>('[aria-label="Director chat input"]')?.focus());
+    };
+    window.addEventListener("mvs-director-focus-chat", focusFromSection as EventListener);
+    return () => window.removeEventListener("mvs-director-focus-chat", focusFromSection as EventListener);
+  }, []);
 
   const send = async () => {
     const message = draft.trim();
@@ -64,9 +75,9 @@ export function DirectorEditChat({ plan, references, sceneImages, shotImages, di
     }
   };
 
-  return <section style={sectionStyle}>
+  return <section style={sectionStyle} aria-label="Director edit chat">
     <div style={headerStyle}>
-      <div><h3 style={titleStyle}>Director chat — adjust clips & images</h3><p style={helpStyle}>Examples: “Make clip-04 a slow push-in and regenerate it,” “Make the chorus scene image warmer,” or “Use the blue-jacket reference for clip-07.”</p></div>
+      <div><h3 style={titleStyle}>Director chat — adjust clips & images</h3><p style={helpStyle}>Examples: “Make the chorus a slow push-in,” “Remove the car from this image,” “Use the blue-jacket asset here,” or “Regenerate this approved section.”</p></div>
       <span style={badgeStyle}>{pending ? "Working…" : "Live edit mode"}</span>
     </div>
     <div style={threadStyle} aria-live="polite">
@@ -75,6 +86,7 @@ export function DirectorEditChat({ plan, references, sceneImages, shotImages, di
     {error && <div style={errorStyle}>{error}</div>}
     <div style={composerStyle}>
       <textarea
+        aria-label="Director chat input"
         value={draft}
         onChange={(event) => setDraft(event.target.value)}
         onKeyDown={(event) => { if ((event.metaKey || event.ctrlKey) && event.key === "Enter") { event.preventDefault(); void send(); } }}
@@ -84,7 +96,7 @@ export function DirectorEditChat({ plan, references, sceneImages, shotImages, di
       />
       <button type="button" className="btn primary" onClick={() => void send()} disabled={pending || disabled || draft.trim().length < 2}>{pending ? "Director is editing…" : "Send to Director"}</button>
     </div>
-    <div style={shortcutStyle}>⌘/Ctrl + Enter to send · clip/image changes stay editable and approvals reset when an image is regenerated.</div>
+    <div style={shortcutStyle}>⌘/Ctrl + Enter to send · visual changes reset preview approval before any new video credits are spent.</div>
   </section>;
 }
 
