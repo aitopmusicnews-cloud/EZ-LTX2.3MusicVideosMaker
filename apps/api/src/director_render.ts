@@ -35,6 +35,13 @@ type DirectorSegment = z.infer<typeof DirectorSegmentSchema>;
 
 function engineHeaders(): Record<string, string> {
   const headers: Record<string, string> = { "content-type": "application/json" };
+  // Modal-native deployment can use the same proxy token pair already supported
+  // by the legacy Modal video endpoint. Keep Bearer auth for non-Modal/self-hosted
+  // Director engines so the API remains backwards compatible.
+  if (config.MODAL_KEY && config.MODAL_SECRET) {
+    headers["Modal-Key"] = config.MODAL_KEY;
+    headers["Modal-Secret"] = config.MODAL_SECRET;
+  }
   if (config.LTX_DIRECTOR_TOKEN) headers.authorization = `Bearer ${config.LTX_DIRECTOR_TOKEN}`;
   return headers;
 }
