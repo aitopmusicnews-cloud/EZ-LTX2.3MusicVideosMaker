@@ -13,11 +13,10 @@ function run(command, args) {
 await run("tsc", ["-p", "tsconfig.json"]);
 
 // Keep the Gemini request on the smallest generateContent surface that the
-// deployed v1beta endpoint accepts. The Director already validates the returned
-// JSON with Zod, so structured-output API configuration is not required here.
+// deployed v1beta endpoint accepts. The Director validates returned JSON with
+// Zod, so structured-output request configuration is not required here.
 const directorDistPath = resolve(process.cwd(), "dist/director_agent.js");
 let directorDist = await readFile(directorDistPath, "utf8");
-
 directorDist = directorDist.replace(/\s*temperature:\s*0\.35,\s*/g, "\n");
 
 const legacyJsonSchemaConfig = `responseMimeType: "application/json",
@@ -36,13 +35,10 @@ const enumResponseFormat = `responseFormat: {
                         schema: RESPONSE_SCHEMA,
                     },
                 },`;
-
 for (const structuredOutputConfig of [legacyJsonSchemaConfig, legacyResponseSchemaConfig, stringResponseFormat, enumResponseFormat]) {
   directorDist = directorDist.replace(structuredOutputConfig, "");
 }
 
-// Give Gemini the exact contract as prompt text instead. This avoids request-
-// validation failures while preserving strict server-side validation and retry.
 const oldPartsInit = `const parts = [{ text: requestContext(req, references) }];`;
 const schemaPromptPartsInit = `const parts = [{ text: requestContext(req, references) + "\\n\\nReturn ONLY valid JSON with no markdown fences or commentary. Match this JSON Schema exactly:\\n" + JSON.stringify(RESPONSE_SCHEMA) }];`;
 if (directorDist.includes(oldPartsInit)) {
@@ -51,14 +47,10 @@ if (directorDist.includes(oldPartsInit)) {
   throw new Error("Could not find the compiled Gemini Director prompt initialization.");
 }
 
-// Accept a fenced JSON response defensively even though the prompt forbids it.
 const oldJsonParse = `parsedJson = JSON.parse(responseText);`;
 const tolerantJsonParse = 'parsedJson = JSON.parse(responseText.replace(/^```(?:json)?\\s*/i, "").replace(/\\s*```$/, "").trim());';
-if (directorDist.includes(oldJsonParse)) {
-  directorDist = directorDist.replace(oldJsonParse, tolerantJsonParse);
-}
+if (directorDist.includes(oldJsonParse)) directorDist = directorDist.replace(oldJsonParse, tolerantJsonParse);
 
-// Preserve Google's full error payload when request validation fails.
 const oldErrorParser = `let message = text;
         try {
             message = JSON.parse(text)?.error?.message ?? text;
@@ -79,32 +71,53 @@ const detailedErrorParser = `let message = text;
         catch {
             // Keep the original response text.
         }`;
+if (directorDist.includes(oldErrorParser)) directorDist = directorDist.replace(oldErrorParser, detailedErrorParser);
 
-if (directorDist.includes(oldErrorParser)) {
-  directorDist = directorDist.replace(oldErrorParser, detailedErrorParser);
-}
-
-// Long clip-by-clip plans can legitimately take more than three minutes. Render
-// allows much longer HTTP responses, so give Gemini up to ten minutes per call.
 directorDist = directorDist.replace(/AbortSignal\.timeout\(180_000\)/g, "AbortSignal.timeout(600_000)");
+directorDist = directorDist.replace(
+  "The plan must be practical for independent 1-to-5-second LTX clips that are later edited together.",
+  "The timeline clips are analyzer-defined musical sections and may be longer than five seconds. Preserve every supplied start/end boundary exactly; the application internally splits long sections into provider-sized generations and stitches them back into one approval unit."
+);
 
-if (directorDist.includes("temperature: 0.35")) {
-  throw new Error("Gemini Director build still contains deprecated temperature configuration.");
-}
+if (directorDist.includes("temperature: 0.35")) throw new Error("Gemini Director build still contains deprecated temperature configuration.");
 for (const forbidden of ["responseFormat:", "responseMimeType:", "responseJsonSchema:", "responseSchema:"]) {
-  if (directorDist.includes(forbidden)) {
-    throw new Error(`Gemini Director build still contains unsupported structured-output configuration: ${forbidden}`);
-  }
+  if (directorDist.includes(forbidden)) throw new Error(`Gemini Director build still contains unsupported structured-output configuration: ${forbidden}`);
 }
-if (!directorDist.includes("Match this JSON Schema exactly")) {
-  throw new Error("Gemini Director build is missing the schema-in-prompt contract.");
-}
-if (directorDist.includes("AbortSignal.timeout(180_000)")) {
-  throw new Error("Gemini Director build still contains the old three-minute timeout.");
-}
-if (!directorDist.includes("AbortSignal.timeout(600_000)")) {
-  throw new Error("Gemini Director build is missing the ten-minute planning timeout.");
-}
-
+if (!directorDist.includes("Match this JSON Schema exactly")) throw new Error("Gemini Director build is missing the schema-in-prompt contract.");
+if (directorDist.includes("AbortSignal.timeout(180_000)")) throw new Error("Gemini Director build still contains the old three-minute timeout.");
+if (!directorDist.includes("AbortSignal.timeout(600_000)")) throw new Error("Gemini Director build is missing the ten-minute planning timeout.");
+if (directorDist.includes("1-to-5-second LTX clips")) throw new Error("Gemini Director prompt still assumes five-second timeline clips.");
 await writeFile(directorDistPath, directorDist, "utf8");
-console.log("[api build] Compiled API with prompt-constrained Gemini Director JSON and a ten-minute planning timeout.");
+
+// Register routes whose implementation files are compiled by tsc but are kept
+// isolated from the legacy one-line server source. Dynamic imports keep this
+// patch small and make missing route wiring fail loudly during the build.
+const serverDistPath = resolve(process.cwd(), "dist/server.js");
+let serverDist = await readFile(serverDistPath, "utf8");
+const routeAnchor = `function sniffMatches(buf, family) {`;
+if (!serverDist.includes(routeAnchor)) throw new Error("Could not find the compiled server route insertion anchor.");
+if (!serverDist.includes('/api/director/chat')) {
+  const routes = `app.post("/api/director/chat", { config: { rateLimit: { max: 20, timeWindow: "1 minute" } } }, async (req, reply) => {
+    try {
+        const { chatWithDirector } = await import("./director_chat.js");
+        return reply.send(await chatWithDirector(req.body));
+    }
+    catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        req.log.error({ err: error }, "LTX Director chat failed");
+        return reply.code(message.includes("GEMINI_API_KEY") ? 503 : message.includes("invalid") || message.includes("unknown") ? 400 : 500).send({ error: message });
+    }
+});
+app.post("/api/videos/stitch", { config: { rateLimit: { max: 20, timeWindow: "1 minute" } } }, async (req, reply) => {
+    const body = z.object({ projectId: SafeId, videos: z.array(z.string().min(1)).min(1).max(40) }).parse(req.body);
+    const { stitchVideoSegments } = await import("./video_stitch.js");
+    return reply.send(await stitchVideoSegments(body.projectId, body.videos));
+});
+${routeAnchor}`;
+  serverDist = serverDist.replace(routeAnchor, routes);
+}
+if (!serverDist.includes('/api/director/chat')) throw new Error("Compiled API is missing /api/director/chat.");
+if (!serverDist.includes('/api/videos/stitch')) throw new Error("Compiled API is missing /api/videos/stitch.");
+await writeFile(serverDistPath, serverDist, "utf8");
+
+console.log("[api build] Compiled Director planning/chat, analyzer-length sections, long-section stitching, and ten-minute planning timeout.");
