@@ -244,10 +244,9 @@ async def _wait_for_output(prompt_id: str, timeout_seconds: float = 1800) -> dic
 
 
 def _public_file_url(file_info: dict[str, str]) -> str:
-    query = urlencode(file_info)
-    if PUBLIC_BASE_URL:
-        return f"{PUBLIC_BASE_URL}/files?{query}"
-    return f"/files?{query}"
+    if not PUBLIC_BASE_URL:
+        raise RuntimeError("DIRECTOR_PUBLIC_BASE_URL is required so Music Video Studio receives an absolute MP4 URL")
+    return f"{PUBLIC_BASE_URL}/files?{urlencode(file_info)}"
 
 
 async def _send_webhook(url: str | None, payload: dict[str, Any]) -> None:
@@ -289,12 +288,19 @@ async def health() -> dict[str, Any]:
         comfy_ready = response.is_success
     except Exception:
         comfy_ready = False
-    return {"ok": True, "comfyui": comfy_ready, "workflow": str(TEMPLATE_PATH)}
+    return {
+        "ok": True,
+        "comfyui": comfy_ready,
+        "workflow": str(TEMPLATE_PATH),
+        "publicOutputUrlConfigured": bool(PUBLIC_BASE_URL),
+    }
 
 
 @app.post("/render-section")
 async def render_section(req: DirectorRenderRequest, authorization: str | None = Header(default=None)) -> dict[str, Any]:
     _authorize(authorization)
+    if not PUBLIC_BASE_URL:
+        raise HTTPException(status_code=503, detail="DIRECTOR_PUBLIC_BASE_URL is required before rendering")
     task = asyncio.create_task(_run(req))
     _background.add(task)
     task.add_done_callback(_background.discard)
@@ -306,7 +312,6 @@ async def files(
     filename: str = Query(min_length=1),
     subfolder: str = "",
     type: str = "output",
-    authorization: str | None = Header(default=None),
 ) -> Response:
     # Browser playback cannot reliably send the engine bearer token, so this route
     # is intentionally public when DIRECTOR_PUBLIC_BASE_URL is exposed. Keep the
