@@ -7,14 +7,8 @@ export function patchDirectorChat(source, replaceRequired) {
     patched = replaceRequired(patched, apiImport, chatImport, "Director edit chat import");
   }
 
-  const visualHelpersAnchor = `  const generateShotVisual = async (key: string, prompt: string, referenceUrl?: string) => {
-    setError(null); setBusy(\`Generating shot image for \${key}\`);
-    try { const url = await generateApprovalImage(prompt, referenceUrl); setShotApproval(key, { url, approved: false }); toast.success("Shot image generated for approval"); } catch (failure) { const message = failure instanceof Error ? failure.message : String(failure); setError(message); toast.error(\`Shot image generation failed: \${message}\`); } finally { setBusy(null); }
-  };
- `;
-
-  const workflowHelpers = `${visualHelpersAnchor}
-  const generateSectionPreview = async (clipId: string) => {
+  const createPlanAnchor = `  const createPlan = async () => {`;
+  const workflowHelpers = `  const generateSectionPreview = async (clipId: string) => {
     const plan = session.plan;
     const shot = plan?.shots.find((item) => item.clipId === clipId);
     const timelineClips = useStore.getState().clips;
@@ -148,10 +142,12 @@ export function patchDirectorChat(source, replaceRequired) {
       else await generateShotVisual(action.clipId, action.prompt, referenceUrl);
     }
   };
- `;
+
+`;
 
   if (!patched.includes("const generateSectionPreview =")) {
-    patched = replaceRequired(patched, visualHelpersAnchor, workflowHelpers, "Director native LTX section preview and chat action handlers");
+    if (!patched.includes(createPlanAnchor)) throw new Error("Could not find Director createPlan insertion anchor.");
+    patched = patched.replace(createPlanAnchor, workflowHelpers + createPlanAnchor);
   }
 
   const assetStrip = `      <div style={assetStripStyle}><div><strong>{characterImageUrl || characterReferences.length ? "Character conditioning ready" : "No character conditioning"}</strong><div style={smallStyle}>{characterReferences.length} uploaded character reference{characterReferences.length === 1 ? "" : "s"} · {readyReferences.length} total inputs</div></div><button type="button" className="btn ghost" onClick={() => window.dispatchEvent(new CustomEvent("mvs-open-reference-chat"))}>Use ＋ References</button></div>`;
