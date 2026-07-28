@@ -82,13 +82,16 @@ export function patchLongSectionScheduler(source) {
   const helpers = `async function generateProviderSegment(job: Job, source: LtxGenerationSource, seedImageUrl: string, duration: number): Promise<string> {
   const promptText = job.input.prompt.trim();
   const providerDuration = Math.min(5, Math.max(1, duration));
+  if (job.input.requiresCharacter && source === "textToVideo") {
+    throw new Error("Character conditioning is required. This section cannot fall back to text-to-video.");
+  }
   let task: { id: string };
   if (source === "textToVideo") {
     task = await startTextToVideo({ promptText, model: "ltx-video", ratio: "3:2", duration: providerDuration });
   } else {
     const firstFrame = source === "continue" ? await resolvePreviousFrame(job) : seedImageUrl;
-    if (!firstFrame) throw new Error("Image-to-video requires a first-frame reference");
-    task = await startImageToVideo({ promptImage: firstFrame, promptText, ratio: "3:2", duration: providerDuration, model: "ltx-video" });
+    if (!firstFrame) throw new Error(job.input.requiresCharacter ? "Character conditioning is required. No character image was attached." : "Image-to-video requires a first-frame reference");
+    task = await startImageToVideo({ promptImage: firstFrame, characterRequired: job.input.requiresCharacter, promptText, ratio: "3:2", duration: providerDuration, model: "ltx-video" });
   }
   setJobPatch(job.id, { taskId: task.id });
   useStore.getState().updateClip(job.clipId, { generationTaskId: task.id });
@@ -150,5 +153,16 @@ ${runAnchor}`;
     }`;
   if (!patched.includes(oldRunBlock)) throw new Error("Could not replace single-call LTX generation with logical section generation.");
   patched = patched.replace(oldRunBlock, newRunBlock);
+
+  const catchAnchor = `  } catch (error) {
+    const rateLimited = error instanceof ApiError && error.rateLimited;`;
+  const catchNext = `  } catch (error) {
+    if (isCancelled(jobId)) {
+      useStore.getState().updateClip(job.clipId, { status: "empty" });
+      return;
+    }
+    const rateLimited = error instanceof ApiError && error.rateLimited;`;
+  if (!patched.includes(catchAnchor)) throw new Error("Could not add cancellation handling for multi-segment generation.");
+  patched = patched.replace(catchAnchor, catchNext);
   return patched;
 }
