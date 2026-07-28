@@ -124,5 +124,5 @@ export async function startDirectorSectionRender(
     createdAt: now,
     updatedAt: Date.now(),
   });
-  return { id: encodeTaskId({ source: "director", id: jobId }) };
+  return { id: encodeTaskId({ source: "modal", id: jobId }) };
 }
