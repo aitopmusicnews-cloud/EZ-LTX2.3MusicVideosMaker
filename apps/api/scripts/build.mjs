@@ -76,7 +76,7 @@ if (directorDist.includes(oldErrorParser)) directorDist = directorDist.replace(o
 directorDist = directorDist.replace(/AbortSignal\.timeout\(180_000\)/g, "AbortSignal.timeout(600_000)");
 directorDist = directorDist.replace(
   "The plan must be practical for independent 1-to-5-second LTX clips that are later edited together.",
-  "The timeline clips are analyzer-defined musical sections and may be longer than five seconds. Preserve every supplied start/end boundary exactly; the application internally splits long sections into provider-sized generations and stitches them back into one approval unit."
+  "The timeline clips are analyzer-defined musical sections and may be longer than five seconds. Preserve every supplied start/end boundary exactly. After approval, Gemini translates each section into chronological internal timeline beats and the LTXDirector node renders that section as one review unit."
 );
 
 if (directorDist.includes("temperature: 0.35")) throw new Error("Gemini Director build still contains deprecated temperature configuration.");
