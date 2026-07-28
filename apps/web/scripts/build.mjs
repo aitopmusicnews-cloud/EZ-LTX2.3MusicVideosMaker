@@ -6,6 +6,9 @@ import { patchDirectorStatus } from "./director-status-patch.mjs";
 import { patchDirectorEditing } from "./director-edit-patch.mjs";
 import { patchDirectorAgentRuntime, patchDirectorReferenceChat } from "./director-agent-runtime-patch.mjs";
 import { patchOptionalCharacterConditioning } from "./optional-character-conditioning.patch.mjs";
+import { patchDirectorChat } from "./director-chat-patch.mjs";
+import { patchAnalyzerDefinedClips, patchLongSectionApi, patchLongSectionScheduler } from "./analyzer-section-workflow.patch.mjs";
+import { patchDirectorAssetPersistence } from "./director-assets.patch.mjs";
 
 const webRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const sidebarPath = resolve(webRoot, "src/components/Sidebar.tsx");
@@ -14,6 +17,7 @@ const agentPath = resolve(webRoot, "src/components/LtxDirectorAgent.tsx");
 const referenceChatPath = resolve(webRoot, "src/components/DirectorReferenceChat.tsx");
 const apiPath = resolve(webRoot, "src/lib/api.ts");
 const schedulerPath = resolve(webRoot, "src/lib/scheduler.ts");
+const storePath = resolve(webRoot, "src/lib/store.ts");
 const inferredDeclaration = "  let percent = current.percent;";
 const numericDeclaration = "  let percent: number = current.percent;";
 
@@ -36,6 +40,7 @@ const originalAgent = await readFile(agentPath, "utf8");
 const originalReferenceChat = await readFile(referenceChatPath, "utf8");
 const originalApi = await readFile(apiPath, "utf8");
 const originalScheduler = await readFile(schedulerPath, "utf8");
+const originalStore = await readFile(storePath, "utf8");
 const needsNormalization = originalSidebar.includes(inferredDeclaration);
 
 if (!needsNormalization && !originalSidebar.includes(numericDeclaration)) {
@@ -60,12 +65,17 @@ if (patchedApi.includes(oldApiErrorMessage)) patchedApi = patchedApi.replace(old
 const oldSliceAudio = `export async function sliceAudio(audioUrl: string, start: number, end: number): Promise<{ url: string }> {\n  return jsonOrThrow(\n    await fetch("/api/audio/slice", {\n      method: "POST",\n      headers: { "content-type": "application/json" },\n      body: JSON.stringify({ audioUrl, start, end }),\n    })\n  );\n}`;
 const retryingSliceAudio = `export async function sliceAudio(audioUrl: string, start: number, end: number): Promise<{ url: string }> {\n  const request = () => fetch("/api/audio/slice", {\n    method: "POST",\n    headers: { "content-type": "application/json" },\n    body: JSON.stringify({ audioUrl, start, end }),\n  });\n  let response = await request();\n  if (response.status >= 500) {\n    await new Promise((resolveRetry) => setTimeout(resolveRetry, 2500));\n    response = await request();\n  }\n  return jsonOrThrow(response);\n}`;
 if (patchedApi.includes(oldSliceAudio)) patchedApi = patchedApi.replace(oldSliceAudio, retryingSliceAudio);
+patchedApi = patchLongSectionApi(patchedApi);
 
 let patchedScheduler = originalScheduler;
 if (!patchedScheduler.includes("Character conditioning is required.")) patchedScheduler = patchDirectorAgentRuntime(patchedScheduler, replaceRequired);
+patchedScheduler = patchLongSectionScheduler(patchedScheduler);
 
+const patchedStore = patchAnalyzerDefinedClips(originalStore);
 let patchedAgent = patchOptionalCharacterConditioning(originalAgent, replaceRequired);
-const patchedReferenceChat = patchDirectorReferenceChat(originalReferenceChat, replaceRequired);
+patchedAgent = patchDirectorChat(patchedAgent, replaceRequired);
+let patchedReferenceChat = patchDirectorReferenceChat(originalReferenceChat, replaceRequired);
+patchedReferenceChat = patchDirectorAssetPersistence(patchedReferenceChat);
 
 try {
   if (needsNormalization) {
@@ -75,11 +85,12 @@ try {
   await writeFile(directorPath, patchedDirector, "utf8");
   console.log("[web build] Kept Director source build-compatible for saved sessions.");
   await writeFile(apiPath, patchedApi, "utf8");
-  console.log("[web build] Added transient Render retry and safe API error messages.");
   await writeFile(schedulerPath, patchedScheduler, "utf8");
+  await writeFile(storePath, patchedStore, "utf8");
+  console.log("[web build] Analyzer sections now define timeline clip lengths; long sections generate internally in LTX-sized segments.");
   await writeFile(agentPath, patchedAgent, "utf8");
   await writeFile(referenceChatPath, patchedReferenceChat, "utf8");
-  console.log("[web build] Made character conditioning optional unless a shot requires it.");
+  console.log("[web build] Enabled Director chat, reusable assets, and section-by-section credit-protected approval.");
   await run("tsc", ["--noEmit"]);
   await run("vite", ["build"]);
 } finally {
@@ -87,6 +98,7 @@ try {
   await writeFile(directorPath, originalDirector, "utf8");
   await writeFile(apiPath, originalApi, "utf8");
   await writeFile(schedulerPath, originalScheduler, "utf8");
+  await writeFile(storePath, originalStore, "utf8");
   await writeFile(agentPath, originalAgent, "utf8");
   await writeFile(referenceChatPath, originalReferenceChat, "utf8");
 }
