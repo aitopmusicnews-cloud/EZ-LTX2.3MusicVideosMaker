@@ -20,6 +20,9 @@ export function patchDirectorChat(source, replaceRequired) {
     const clipIndex = timelineClips.findIndex((item) => item.id === clipId);
     const clip = clipIndex >= 0 ? timelineClips[clipIndex] : undefined;
     if (!shot || !clip) { setError(\`Could not find section \${clipId} on the timeline.\`); return; }
+    if (!session.treatmentApproved) { setError("Approve the treatment before spending video credits on a section."); return; }
+    if (!session.sceneApprovals[clipId]?.approved) { setError(\`Approve the scene image for \${shot.sectionLabel} before generating video.\`); return; }
+    if (!session.shotApprovals[clipId]?.approved) { setError(\`Approve the shot image for \${shot.sectionLabel} before generating video.\`); return; }
     const conditioningUrl = resolveReferenceUrl(shot.conditioningReferenceId) || undefined;
     if (shot.requiresCharacter && !conditioningUrl) { setError(\`\${shot.sectionLabel} needs a character asset before video generation.\`); return; }
     const previousReady = clipIndex > 0 && timelineClips[clipIndex - 1]?.status === "ready" && Boolean(timelineClips[clipIndex - 1]?.videoUrl);
@@ -75,25 +78,17 @@ export function patchDirectorChat(source, replaceRequired) {
         });
 
         if (action.regenerate) {
-          const clip = useStore.getState().clips.find((item) => item.id === action.clipId);
-          if (clip) {
-            const clipIndex = useStore.getState().clips.findIndex((item) => item.id === action.clipId);
-            const previousReady = clipIndex > 0 && useStore.getState().clips[clipIndex - 1]?.status === "ready" && Boolean(useStore.getState().clips[clipIndex - 1]?.videoUrl);
-            const source = conditioningUrl ? "imageToVideo" : previousReady ? "continue" : "textToVideo";
-            (enqueueGeneration as any)({
-              clipId: clip.id,
-              source,
-              seedImageUrl: conditioningUrl || "",
-              requiresCharacter: nextShot.requiresCharacter,
-              prompt: nextShot.prompt,
-              duration: clip.end - clip.start,
-              sectionLabel: nextShot.sectionLabel,
-              energy: 0.65,
-              model: "ltx-video",
-            });
+          const visualChanged = action.prompt !== undefined || action.continuityNotes !== undefined || action.transition !== undefined || action.requiresCharacter !== undefined || action.conditioningReferenceId !== undefined;
+          if (visualChanged) {
+            const imagePrompt = \`\${nextShot.prompt}. Continuity: \${nextShot.continuityNotes}. Transition: \${nextShot.transition}.\`;
+            await generateShotVisual(action.clipId, imagePrompt, conditioningUrl || characterImageUrl || undefined);
+            toast.success(\`Director updated \${action.clipId} and made a new shot image. Approve that image before regenerating video.\`);
+          } else {
+            generateSectionPreview(action.clipId);
           }
+        } else {
+          toast.success(\`Director updated \${action.clipId}\`);
         }
-        toast.success(action.regenerate ? \`Director updated and requeued \${action.clipId}\` : \`Director updated \${action.clipId}\`);
         continue;
       }
 
