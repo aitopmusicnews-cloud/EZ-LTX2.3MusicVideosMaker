@@ -1,13 +1,96 @@
 # Modal services
 
-## LTX-2.3 video worker
+## LTX-2.3 Director worker (ComfyUI)
 
-`ltx_video.py` deploys two public Modal web functions:
+`ltx_director_agent.py` is the GPU host for the Music Video Studio Director. It runs the uploaded LTX Director workflow on Modal using ComfyUI, `LTXDirector`, `LTXDirectorGuide`, KJNodes, ComfyUI-LTXVideo, and VideoHelperSuite.
 
-- `generate`: accepts a prompt and optional first-frame image, then immediately spawns GPU work
-- `get_file`: serves completed MP4 files from the `mvs-ltx-outputs` Volume
+It is intentionally a separate Modal app (`mvs-ltx-director`) from the existing short-clip Diffusers worker so the legacy path remains available while the native Director workflow is validated.
 
-The GPU class uses:
+### One-time setup
+
+From the repository root:
+
+```bash
+python3.12 -m venv .venv
+source .venv/bin/activate
+pip install modal
+modal setup
+```
+
+Download the Director model files into the persistent Modal Volume **without allocating a GPU**:
+
+```bash
+modal run modal/ltx_director_agent.py::prepare_director_models
+```
+
+The model set is stored in the `mvs-ltx-director-models` Modal Volume. Re-running the command skips files already present.
+
+### Deploy the Director
+
+```bash
+modal deploy modal/ltx_director_agent.py
+```
+
+Modal prints a URL for the `director_generate` web function. Copy that exact URL into the Render service environment as:
+
+```env
+LTX_DIRECTOR_URL=https://YOUR-WORKSPACE--mvs-ltx-director-director-generate.modal.run
+```
+
+Do **not** append `/render-section` to a Modal Function URL.
+
+For the default Modal deployment, `LTX_DIRECTOR_TOKEN` can remain blank.
+
+The Director uses `A100-80GB` by default. To select a different Modal GPU at deployment time, set `MVS_LTX_DIRECTOR_GPU`, for example:
+
+```bash
+MVS_LTX_DIRECTOR_GPU=H100 modal deploy modal/ltx_director_agent.py
+```
+
+### Optional Modal proxy authentication
+
+The Director web function can use Modal proxy authentication. Deploy with:
+
+```bash
+MVS_MODAL_PROXY_AUTH=1 modal deploy modal/ltx_director_agent.py
+```
+
+Then put the matching Modal proxy token pair in the Render API service:
+
+```env
+MODAL_KEY=wk-...
+MODAL_SECRET=ws-...
+```
+
+The Render Director client automatically sends those headers when they are configured.
+
+### Production flow
+
+```text
+Music Video Studio / Render
+          ↓
+Gemini Director plan + approved section
+          ↓
+Modal director_generate URL
+          ↓
+A100-80GB (default)
+          ↓
+ComfyUI + LTXDirector timeline
+          ↓
+VHS H.264 MP4
+          ↓
+Modal output Volume / file URL
+          ↓
+Render webhook + existing task polling
+          ↓
+Section review / approval
+```
+
+The Director still respects the application's credit gate: one section is generated at a time and the next section stays blocked until the current result is reviewed and approved.
+
+## Legacy LTX-2.3 short-clip worker
+
+`ltx_video_agent.py` keeps the existing Diffusers-based generation path available for non-Director work. It currently uses:
 
 - `diffusers/LTX-2.3-Distilled-Diffusers`
 - A100-80GB
@@ -17,28 +100,17 @@ The GPU class uses:
 - text-to-video or first-frame image conditioning
 - webhook completion callbacks
 
-Deploy from the repository root:
+Deploy it separately when that worker changes:
 
 ```bash
-python3.12 -m venv .venv
-source .venv/bin/activate
-pip install modal
-modal setup
-modal deploy modal/ltx_video.py
+modal deploy modal/ltx_video_agent.py
 ```
 
-Copy the generated `generate` URL into the Render environment as `MODAL_LTX_URL`.
+Copy the generated `generate` URL into Render as:
 
-Test it directly:
-
-```bash
-export MODAL_LTX_URL=https://YOUR-WORKSPACE--mvs-ltx-video-generate.modal.run
-curl -X POST "$MODAL_LTX_URL" \
-  -H 'Content-Type: application/json' \
-  -d '{"prompt":"A dramatic performance in a chrome tunnel","duration":4}'
+```env
+MODAL_LTX_URL=https://YOUR-WORKSPACE--mvs-ltx-video-generate.modal.run
 ```
-
-The endpoint returns `status: accepted`. Completion is asynchronous. In normal app usage, Modal calls the Render API webhook supplied in the request.
 
 ## Other workers
 
