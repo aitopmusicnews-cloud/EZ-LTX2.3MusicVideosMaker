@@ -2,7 +2,7 @@ export function patchDirectorChat(source, replaceRequired) {
   let patched = source;
 
   const apiImport = 'import { startTextToImage, pollTask, saveImageToLibrary } from "../lib/api.js";';
-  const chatImport = `${apiImport}\nimport { DirectorEditChat, type DirectorEditAction } from "./DirectorEditChat.js";\nimport { DirectorSectionReview } from "./DirectorSectionReview.js";\nimport { DirectorAssetsPanel } from "./DirectorAssetsPanel.js";`;
+  const chatImport = `import { startTextToImage, pollTask, saveImageToLibrary, saveClipToServer, startDirectorSectionRender } from "../lib/api.js";\nimport { DirectorEditChat, type DirectorEditAction } from "./DirectorEditChat.js";\nimport { DirectorSectionReview } from "./DirectorSectionReview.js";\nimport { DirectorAssetsPanel } from "./DirectorAssetsPanel.js";`;
   if (!patched.includes('from "./DirectorEditChat.js"')) {
     patched = replaceRequired(patched, apiImport, chatImport, "Director edit chat import");
   }
@@ -11,43 +11,91 @@ export function patchDirectorChat(source, replaceRequired) {
     setError(null); setBusy(\`Generating shot image for \${key}\`);
     try { const url = await generateApprovalImage(prompt, referenceUrl); setShotApproval(key, { url, approved: false }); toast.success("Shot image generated for approval"); } catch (failure) { const message = failure instanceof Error ? failure.message : String(failure); setError(message); toast.error(\`Shot image generation failed: \${message}\`); } finally { setBusy(null); }
   };
-`;
+ `;
 
   const workflowHelpers = `${visualHelpersAnchor}
-  const generateSectionPreview = (clipId: string) => {
-    const shot = session.plan?.shots.find((item) => item.clipId === clipId);
+  const generateSectionPreview = async (clipId: string) => {
+    const plan = session.plan;
+    const shot = plan?.shots.find((item) => item.clipId === clipId);
     const timelineClips = useStore.getState().clips;
-    const clipIndex = timelineClips.findIndex((item) => item.id === clipId);
-    const clip = clipIndex >= 0 ? timelineClips[clipIndex] : undefined;
-    if (!shot || !clip) { setError(\`Could not find section \${clipId} on the timeline.\`); return; }
+    const clip = timelineClips.find((item) => item.id === clipId);
+    if (!plan || !shot || !clip) { setError(\`Could not find section \${clipId} on the timeline.\`); return; }
     if (!session.treatmentApproved) { setError("Approve the treatment before spending video credits on a section."); return; }
     if (!session.sceneApprovals[clipId]?.approved) { setError(\`Approve the scene image for \${shot.sectionLabel} before generating video.\`); return; }
     if (!session.shotApprovals[clipId]?.approved) { setError(\`Approve the shot image for \${shot.sectionLabel} before generating video.\`); return; }
     const conditioningUrl = resolveReferenceUrl(shot.conditioningReferenceId) || undefined;
     if (shot.requiresCharacter && !conditioningUrl) { setError(\`\${shot.sectionLabel} needs a character asset before video generation.\`); return; }
-    const previousReady = clipIndex > 0 && timelineClips[clipIndex - 1]?.status === "ready" && Boolean(timelineClips[clipIndex - 1]?.videoUrl);
-    const source = conditioningUrl ? "imageToVideo" : previousReady ? "continue" : "textToVideo";
+    const anotherActive = timelineClips.some((item) => item.id !== clipId && (item.status === "queued" || item.status === "generating"));
+    if (anotherActive) { setError("Another Director section is already generating. Finish and review it before starting another."); return; }
+
+    const characterDirection = [
+      plan.characterBible.referenceSummary,
+      plan.characterBible.immutableTraits.join(", "),
+      plan.characterBible.wardrobe,
+      plan.characterBible.prohibitedChanges.length ? \`Do not change: \${plan.characterBible.prohibitedChanges.join(", ")}\` : "",
+    ].filter(Boolean).join(". ");
+    const globalPrompt = [
+      plan.treatment.logline,
+      \`Visual style: \${plan.treatment.visualStyle}\`,
+      \`Color palette: \${plan.treatment.colorPalette}\`,
+      \`Camera language: \${plan.treatment.cameraLanguage}\`,
+      \`Continuity: \${plan.treatment.continuityStrategy}\`,
+      characterDirection,
+    ].filter(Boolean).join(". ");
+
+    setError(null);
     updateClip(clip.id, {
       prompt: shot.prompt,
       sectionLabel: shot.sectionLabel,
       seedImageUrl: conditioningUrl,
       archetypeUrl: conditioningUrl,
-      source,
-      model: "ltx-video",
+      source: conditioningUrl ? "imageToVideo" : "textToVideo",
+      model: "ltx-director",
+      status: "generating",
+      videoUrl: undefined,
       lastError: undefined,
     });
-    (enqueueGeneration as any)({
-      clipId: clip.id,
-      source,
-      seedImageUrl: conditioningUrl || "",
-      requiresCharacter: shot.requiresCharacter,
-      prompt: shot.prompt,
-      duration: clip.end - clip.start,
-      sectionLabel: shot.sectionLabel,
-      energy: 0.65,
-      model: "ltx-video",
-    });
-    toast.success(\`Generating only \${shot.sectionLabel}. Review and approve it before moving on.\`);
+
+    try {
+      const task = await startDirectorSectionRender({
+        projectId: useStore.getState().projectId ?? "director",
+        clipId: clip.id,
+        sectionLabel: shot.sectionLabel,
+        globalPrompt,
+        prompt: shot.prompt,
+        duration: clip.end - clip.start,
+        conditioningImageUrl: conditioningUrl,
+        requiresCharacter: shot.requiresCharacter,
+        fps: 24,
+      });
+      updateClip(clip.id, { generationTaskId: task.id });
+      toast.success(\`LTXDirector is producing only \${shot.sectionLabel}. Review it before moving on.\`);
+
+      const final = await pollTask(task.id, 5000, 1_800_000);
+      const videoUrl = final.outputUrl || (Array.isArray(final.output) ? final.output[0] : final.output?.videoUrl ?? final.output?.url);
+      if ((final.status || "").toUpperCase() !== "SUCCEEDED" || !videoUrl) {
+        throw new Error(final.error ?? \`Director task ended in \${final.status} with no video.\`);
+      }
+
+      updateClip(clip.id, { videoUrl, status: "ready", model: "ltx-director", lastError: undefined });
+      void saveClipToServer({
+        id: clip.id,
+        name: shot.prompt.slice(0, 60) || \`\${shot.sectionLabel} Director section\`,
+        videoUrl,
+        source: conditioningUrl ? "imageToVideo" : "textToVideo",
+        prompt: shot.prompt,
+        duration: clip.end - clip.start,
+        sectionLabel: shot.sectionLabel,
+        model: "ltx-director",
+        generationTaskId: task.id,
+      }).catch((failure) => console.warn("Director section auto-save failed", failure));
+      toast.success(\`\${shot.sectionLabel} is ready to watch and approve.\`);
+    } catch (failure) {
+      const message = failure instanceof Error ? failure.message : String(failure);
+      updateClip(clip.id, { status: "failed", lastError: message });
+      setError(message);
+      toast.error(\`LTX Director section failed: \${message.slice(0, 120)}\`);
+    }
   };
 
   const applyDirectorChatActions = async (actions: DirectorEditAction[]) => {
@@ -74,7 +122,7 @@ export function patchDirectorChat(source, replaceRequired) {
           seedImageUrl: conditioningUrl || undefined,
           archetypeUrl: conditioningUrl || undefined,
           source: conditioningUrl ? "imageToVideo" : "textToVideo",
-          model: "ltx-video",
+          model: "ltx-director",
         });
 
         if (action.regenerate) {
@@ -84,7 +132,7 @@ export function patchDirectorChat(source, replaceRequired) {
             await generateShotVisual(action.clipId, imagePrompt, conditioningUrl || characterImageUrl || undefined);
             toast.success(\`Director updated \${action.clipId} and made a new shot image. Approve that image before regenerating video.\`);
           } else {
-            generateSectionPreview(action.clipId);
+            await generateSectionPreview(action.clipId);
           }
         } else {
           toast.success(\`Director updated \${action.clipId}\`);
@@ -100,10 +148,10 @@ export function patchDirectorChat(source, replaceRequired) {
       else await generateShotVisual(action.clipId, action.prompt, referenceUrl);
     }
   };
-`;
+ `;
 
   if (!patched.includes("const generateSectionPreview =")) {
-    patched = replaceRequired(patched, visualHelpersAnchor, workflowHelpers, "Director section preview and chat action handlers");
+    patched = replaceRequired(patched, visualHelpersAnchor, workflowHelpers, "Director native LTX section preview and chat action handlers");
   }
 
   const assetStrip = `      <div style={assetStripStyle}><div><strong>{characterImageUrl || characterReferences.length ? "Character conditioning ready" : "No character conditioning"}</strong><div style={smallStyle}>{characterReferences.length} uploaded character reference{characterReferences.length === 1 ? "" : "s"} · {readyReferences.length} total inputs</div></div><button type="button" className="btn ghost" onClick={() => window.dispatchEvent(new CustomEvent("mvs-open-reference-chat"))}>Use ＋ References</button></div>`;
