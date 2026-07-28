@@ -8,6 +8,7 @@ import { patchDirectorAgentRuntime, patchDirectorReferenceChat } from "./directo
 import { patchOptionalCharacterConditioning } from "./optional-character-conditioning.patch.mjs";
 import { patchDirectorChat } from "./director-chat-patch.mjs";
 import { patchAnalyzerDefinedClips, patchLongSectionApi, patchLongSectionScheduler } from "./analyzer-section-workflow.patch.mjs";
+import { patchDirectorRenderApi } from "./director-node-render.patch.mjs";
 import { patchDirectorAssetPersistence } from "./director-assets.patch.mjs";
 import { patchSocialExport } from "./social-export.patch.mjs";
 import { patchDirectorLeftRailLauncher, patchLeftRailTools, patchPromoLeftRailLauncher, patchReferenceLeftRailLauncher } from "./left-rail-tools.patch.mjs";
@@ -73,6 +74,7 @@ const oldSliceAudio = `export async function sliceAudio(audioUrl: string, start:
 const retryingSliceAudio = `export async function sliceAudio(audioUrl: string, start: number, end: number): Promise<{ url: string }> {\n  const request = () => fetch("/api/audio/slice", {\n    method: "POST",\n    headers: { "content-type": "application/json" },\n    body: JSON.stringify({ audioUrl, start, end }),\n  });\n  let response = await request();\n  if (response.status >= 500) {\n    await new Promise((resolveRetry) => setTimeout(resolveRetry, 2500));\n    response = await request();\n  }\n  return jsonOrThrow(response);\n}`;
 if (patchedApi.includes(oldSliceAudio)) patchedApi = patchedApi.replace(oldSliceAudio, retryingSliceAudio);
 patchedApi = patchLongSectionApi(patchedApi);
+patchedApi = patchDirectorRenderApi(patchedApi);
 
 let patchedScheduler = originalScheduler;
 if (!patchedScheduler.includes("Character conditioning is required.")) patchedScheduler = patchDirectorAgentRuntime(patchedScheduler, replaceRequired);
@@ -99,7 +101,8 @@ try {
   await writeFile(apiPath, patchedApi, "utf8");
   await writeFile(schedulerPath, patchedScheduler, "utf8");
   await writeFile(storePath, patchedStore, "utf8");
-  console.log("[web build] Analyzer sections now define timeline clip lengths; long sections generate internally in LTX-sized segments.");
+  console.log("[web build] Analyzer sections now define timeline clip lengths; legacy long sections can still generate internally in LTX-sized segments.");
+  console.log("[web build] Director section previews now use the native LTXDirector engine endpoint.");
   await writeFile(agentPath, patchedAgent, "utf8");
   await writeFile(referenceChatPath, patchedReferenceChat, "utf8");
   await writeFile(leftRailPath, patchedLeftRail, "utf8");
