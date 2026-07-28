@@ -108,6 +108,18 @@ if (!serverDist.includes('/api/director/chat')) {
         return reply.code(message.includes("GEMINI_API_KEY") ? 503 : message.includes("invalid") || message.includes("unknown") ? 400 : 500).send({ error: message });
     }
 });
+app.post("/api/director/render-section", { config: { rateLimit: { max: 6, timeWindow: "1 minute" } } }, async (req, reply) => {
+    try {
+        const { startDirectorSectionRender } = await import("./director_render.js");
+        return reply.code(202).send(await startDirectorSectionRender(req.body, requestPublicBaseUrl(req)));
+    }
+    catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        req.log.error({ err: error }, "LTX Director section render failed");
+        const status = error instanceof z.ZodError ? 400 : message.includes("Character conditioning") ? 409 : message.includes("LTX_DIRECTOR_URL") || message.includes("Could not reach") ? 503 : 500;
+        return reply.code(status).send({ error: message });
+    }
+});
 app.post("/api/videos/stitch", { config: { rateLimit: { max: 20, timeWindow: "1 minute" } } }, async (req, reply) => {
     const body = z.object({ projectId: SafeId, videos: z.array(z.string().min(1)).min(1).max(40) }).parse(req.body);
     const { stitchVideoSegments } = await import("./video_stitch.js");
@@ -122,8 +134,9 @@ ${routeAnchor}`;
   serverDist = serverDist.replace(routeAnchor, routes);
 }
 if (!serverDist.includes('/api/director/chat')) throw new Error("Compiled API is missing /api/director/chat.");
+if (!serverDist.includes('/api/director/render-section')) throw new Error("Compiled API is missing /api/director/render-section.");
 if (!serverDist.includes('/api/videos/stitch')) throw new Error("Compiled API is missing /api/videos/stitch.");
 if (!serverDist.includes('/api/social/export')) throw new Error("Compiled API is missing /api/social/export.");
 await writeFile(serverDistPath, serverDist, "utf8");
 
-console.log("[api build] Compiled Director planning/chat, analyzer-length sections, long-section stitching, social exports, and ten-minute planning timeout.");
+console.log("[api build] Compiled Director planning/chat, native LTX Director section rendering, analyzer-length sections, long-section stitching, social exports, and ten-minute planning timeout.");
