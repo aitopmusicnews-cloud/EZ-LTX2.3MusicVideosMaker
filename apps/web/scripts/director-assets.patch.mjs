@@ -46,12 +46,17 @@ export function patchDirectorAssetPersistence(source) {
         progress: detail.media === "note" ? undefined : 100,
         createdAt: Date.now(),
       };
-      setItems((current) => current.some((entry) => (entry.anchorUrl ?? entry.url) === anchorUrl) ? current : [...current, item]);
+      setItems((current) => {
+        if (current.some((entry) => (entry.anchorUrl ?? entry.url) === anchorUrl)) return current;
+        const next = [...current, item];
+        if (songId) localStorage.setItem(storageKey(songId), JSON.stringify(next));
+        return next;
+      });
       dispatchReference({ kind: item.kind, media: item.media, name: item.name, url: anchorUrl, sourceUrl, note: item.note });
     };
     window.addEventListener("mvs-director-save-asset", receiveSavedAsset as EventListener);
     return () => window.removeEventListener("mvs-director-save-asset", receiveSavedAsset as EventListener);
-  }, []);`;
+  }, [songId]);`;
   if (!patched.includes("mvs-director-save-asset")) {
     if (!patched.includes(persistenceEffect)) throw new Error("Could not find Director reference persistence effect.");
     patched = patched.replace(persistenceEffect, assetEffect);
