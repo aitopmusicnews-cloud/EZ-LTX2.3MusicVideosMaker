@@ -5,21 +5,15 @@ import { fileURLToPath } from "node:url";
 import { patchDirectorStatus } from "./director-status-patch.mjs";
 import { patchDirectorEditing } from "./director-edit-patch.mjs";
 import { patchDirectorAgentRuntime, patchDirectorReferenceChat } from "./director-agent-runtime-patch.mjs";
-import { patchOptionalCharacterConditioning } from "./optional-character-conditioning.patch.mjs";
-import { patchDirectorChat } from "./director-chat-patch.mjs";
 import { patchAnalyzerDefinedClips, patchLongSectionApi, patchLongSectionScheduler } from "./analyzer-section-workflow.patch.mjs";
 import { patchDirectorRenderApi } from "./director-node-render.patch.mjs";
 import { patchDirectorAssetPersistence } from "./director-assets.patch.mjs";
 import { patchSocialExport } from "./social-export.patch.mjs";
-import { patchDirectorLeftRailLauncher, patchLeftRailTools, patchPromoLeftRailLauncher, patchReferenceLeftRailLauncher } from "./left-rail-tools.patch.mjs";
 
 const webRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const sidebarPath = resolve(webRoot, "src/components/Sidebar.tsx");
 const directorPath = resolve(webRoot, "src/components/AutoDirector.tsx");
-const agentPath = resolve(webRoot, "src/components/LtxDirectorAgent.tsx");
 const referenceChatPath = resolve(webRoot, "src/components/DirectorReferenceChat.tsx");
-const leftRailPath = resolve(webRoot, "src/components/LeftRail.tsx");
-const promoPath = resolve(webRoot, "src/components/PromoRangeSelector.tsx");
 const apiPath = resolve(webRoot, "src/lib/api.ts");
 const schedulerPath = resolve(webRoot, "src/lib/scheduler.ts");
 const storePath = resolve(webRoot, "src/lib/store.ts");
@@ -41,10 +35,7 @@ function replaceRequired(source, from, to, label) {
 
 const originalSidebar = await readFile(sidebarPath, "utf8");
 const originalDirector = await readFile(directorPath, "utf8");
-const originalAgent = await readFile(agentPath, "utf8");
 const originalReferenceChat = await readFile(referenceChatPath, "utf8");
-const originalLeftRail = await readFile(leftRailPath, "utf8");
-const originalPromo = await readFile(promoPath, "utf8");
 const originalApi = await readFile(apiPath, "utf8");
 const originalScheduler = await readFile(schedulerPath, "utf8");
 const originalStore = await readFile(storePath, "utf8");
@@ -81,14 +72,8 @@ if (!patchedScheduler.includes("Character conditioning is required.")) patchedSc
 patchedScheduler = patchLongSectionScheduler(patchedScheduler);
 
 const patchedStore = patchAnalyzerDefinedClips(originalStore);
-let patchedAgent = patchOptionalCharacterConditioning(originalAgent, replaceRequired);
-patchedAgent = patchDirectorChat(patchedAgent, replaceRequired);
-patchedAgent = patchDirectorLeftRailLauncher(patchedAgent, replaceRequired);
 let patchedReferenceChat = patchDirectorReferenceChat(originalReferenceChat, replaceRequired);
 patchedReferenceChat = patchDirectorAssetPersistence(patchedReferenceChat);
-patchedReferenceChat = patchReferenceLeftRailLauncher(patchedReferenceChat);
-const patchedLeftRail = patchLeftRailTools(originalLeftRail, replaceRequired);
-const patchedPromo = patchPromoLeftRailLauncher(originalPromo, replaceRequired);
 
 try {
   if (needsNormalization) {
@@ -102,13 +87,8 @@ try {
   await writeFile(schedulerPath, patchedScheduler, "utf8");
   await writeFile(storePath, patchedStore, "utf8");
   console.log("[web build] Analyzer sections now define timeline clip lengths; legacy long sections can still generate internally in LTX-sized segments.");
-  console.log("[web build] Director section previews now use the native LTXDirector engine endpoint.");
-  await writeFile(agentPath, patchedAgent, "utf8");
+  console.log("[web build] Restored the LTX Director Agent to its normal source workflow without build-time UI rewrites.");
   await writeFile(referenceChatPath, patchedReferenceChat, "utf8");
-  await writeFile(leftRailPath, patchedLeftRail, "utf8");
-  await writeFile(promoPath, patchedPromo, "utf8");
-  console.log("[web build] Moved Director, References, and Promo launchers into the left rail so the timeline stays clear.");
-  console.log("[web build] Enabled Director chat, reusable assets, and section-by-section credit-protected approval.");
   await run("tsc", ["--noEmit"]);
   await run("vite", ["build"]);
 } finally {
@@ -117,8 +97,5 @@ try {
   await writeFile(apiPath, originalApi, "utf8");
   await writeFile(schedulerPath, originalScheduler, "utf8");
   await writeFile(storePath, originalStore, "utf8");
-  await writeFile(agentPath, originalAgent, "utf8");
   await writeFile(referenceChatPath, originalReferenceChat, "utf8");
-  await writeFile(leftRailPath, originalLeftRail, "utf8");
-  await writeFile(promoPath, originalPromo, "utf8");
 }
