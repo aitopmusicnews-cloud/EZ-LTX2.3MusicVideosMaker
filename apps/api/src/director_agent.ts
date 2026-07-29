@@ -81,13 +81,13 @@ const ShotPlanSchema = z.object({
   transition: z.string().min(1),
 });
 
-const GeminiDirectorPlanSchema = z.object({
+const DirectorPlanSchema = z.object({
   treatment: TreatmentSchema,
   characterBible: CharacterBibleSchema,
   shots: z.array(ShotPlanSchema).min(1).max(80),
 });
 
-export type LtxDirectorPlan = z.infer<typeof GeminiDirectorPlanSchema> & {
+export type LtxDirectorPlan = z.infer<typeof DirectorPlanSchema> & {
   version: "ltx-director-v1";
   agentModel: string;
 };
@@ -156,7 +156,7 @@ const RESPONSE_SCHEMA = {
   required: ["treatment", "characterBible", "shots"],
 } as const;
 
-type GeminiPart =
+type PlannerPart =
   | { text: string }
   | { inlineData: { mimeType: string; data: string } };
 
@@ -169,6 +169,11 @@ type PreparedReference = {
   anchorUrl?: string;
 };
 
+type PlannerCandidate = {
+  provider: "openai" | "gemini";
+  model: string;
+};
+
 const MAX_REFERENCE_IMAGES = 10;
 const MAX_REFERENCE_BYTES = 12 * 1024 * 1024;
 
@@ -178,24 +183,30 @@ function wordCount(text: string): number {
 
 function systemInstruction(): string {
   return [
-    "You are an expert music-video director and an LTX-2.3 prompt engineer.",
-    "Create a production plan for the exact timeline clips supplied by the application.",
-    "Return one and only one shot for every supplied clipId. Never invent, omit, merge, or rename clip IDs.",
-    "LTX prompts must be one flowing paragraph, chronological, literal, visually observable, and no more than 190 words.",
-    "Each prompt must start directly with the visible action, then describe gestures, exact character appearance, environment, camera framing and movement, lighting, color, and visible changes during the shot.",
-    "Do not use abstract marketing language, screenplay headings, bullet points, dialogue formatting, or unsupported model parameters inside prompts.",
-    "Character continuity is an asset-conditioning problem, not a promise in prose. Set requiresCharacter=true only when a real character reference ID is supplied and the shot should use it; otherwise set requiresCharacter=false and conditioningReferenceId=null.",
-    "Never claim a character is locked when no character reference ID exists. Never invent reference IDs.",
-    "Repeat important immutable facial, hair, wardrobe, and accessory traits naturally inside character-shot prompts when a character reference is available.",
-    "Use uploaded style, location, and shot references as visual evidence. Use notes as requirements, not as optional inspiration.",
-    "Respect the user's must-include and avoid instructions exactly.",
-    "The plan must be practical for independent 1-to-5-second LTX clips that are later edited together.",
+    "You are an exceptional music-video director, visual storyteller, editor, and LTX-2.3 prompt engineer.",
+    "Create a bold, highly visual production plan for the exact timeline clips supplied by the application.",
+    "Treat the song structure, energy, references, and creative brief as material for real directing choices, not generic filler.",
+    "Every clip must feel intentionally designed. Vary shot scale, lens feeling, composition, camera movement, blocking, lighting, location use, performance direction, and transitions across the timeline.",
+    "Build progression: establish a visual language, escalate it through later sections, and introduce memorable visual surprises where the music supports them.",
+    "Avoid repeating the same camera move, framing, location description, performance beat, or stock phrase across neighboring shots.",
+    "Prefer specific observable actions and cinematic ideas over vague words such as cinematic, epic, beautiful, emotional, stylish, or dynamic unless the prompt also states exactly what is visible.",
+    "Use contrast deliberately: wide versus close, stillness versus motion, performance versus narrative, clean compositions versus controlled visual chaos, grounded moments versus surreal punctuation when appropriate to the user's vision.",
+    "Create one and only one shot for every supplied clipId. Never invent, omit, merge, or rename clip IDs.",
+    "LTX prompts must be one flowing paragraph, chronological, visually observable, and no more than 190 words.",
+    "Each prompt should start with the visible action, then specify subject behavior, environment, camera framing and movement, lighting, color, texture, and how the image changes over the shot.",
+    "Do not use screenplay headings, bullet points, unsupported model parameters, or empty marketing language inside LTX prompts.",
+    "Character continuity is an asset-conditioning problem. Set requiresCharacter=true only when a real character reference ID is supplied and the shot should use it; otherwise set requiresCharacter=false and conditioningReferenceId=null.",
+    "Never invent reference IDs or claim identity is locked without a real conditioning asset.",
+    "When a character reference exists, repeat only the most important immutable facial, hair, wardrobe, and accessory traits needed for that shot.",
+    "Use uploaded style, location, character, and shot references as visual evidence. Use user notes as requirements.",
+    "Respect must-include and avoid instructions exactly.",
+    "The final plan must remain practical for independent 1-to-5-second LTX clips that will be edited together into one music video.",
   ].join(" ");
 }
 
 function requestContext(req: DirectorPlanRequest, references: PreparedReference[]): string {
   return JSON.stringify({
-    task: "Create the final editable LTX-2.3 treatment, character bible, and clip-by-clip production prompts.",
+    task: "Create the final editable LTX-2.3 treatment, character bible, and clip-by-clip production prompts. Maximize visual originality while preserving exact timeline clip IDs and timing.",
     song: {
       id: req.songId,
       filename: req.songFilename,
@@ -278,7 +289,7 @@ function prepareReferences(req: DirectorPlanRequest): PreparedReference[] {
 }
 
 function validatePlan(
-  plan: z.infer<typeof GeminiDirectorPlanSchema>,
+  plan: z.infer<typeof DirectorPlanSchema>,
   req: DirectorPlanRequest,
   references: PreparedReference[],
 ): string[] {
@@ -335,7 +346,23 @@ function extractGeminiText(payload: unknown): string {
   return parts.map((part: any) => typeof part?.text === "string" ? part.text : "").join("").trim();
 }
 
-async function callGemini(parts: GeminiPart[], model: string): Promise<unknown> {
+function extractOpenAIText(payload: unknown): string {
+  const direct = (payload as any)?.output_text;
+  if (typeof direct === "string" && direct.trim()) return direct.trim();
+  const output = (payload as any)?.output;
+  if (!Array.isArray(output)) return "";
+  const text: string[] = [];
+  for (const item of output) {
+    const content = item?.content;
+    if (!Array.isArray(content)) continue;
+    for (const part of content) {
+      if (typeof part?.text === "string") text.push(part.text);
+    }
+  }
+  return text.join("").trim();
+}
+
+async function callGemini(parts: PlannerPart[], model: string): Promise<string> {
   const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
   const response = await fetch(endpoint, {
     method: "POST",
@@ -347,7 +374,7 @@ async function callGemini(parts: GeminiPart[], model: string): Promise<unknown> 
       systemInstruction: { parts: [{ text: systemInstruction() }] },
       contents: [{ role: "user", parts }],
       generationConfig: {
-        temperature: 0.35,
+        temperature: 0.8,
         maxOutputTokens: 32768,
         responseMimeType: "application/json",
         responseJsonSchema: RESPONSE_SCHEMA,
@@ -362,18 +389,93 @@ async function callGemini(parts: GeminiPart[], model: string): Promise<unknown> 
     try {
       message = JSON.parse(text)?.error?.message ?? text;
     } catch {
-      // Keep the original response text.
+      // Keep original response text.
     }
-    throw new Error(`Gemini Director failed: ${message.slice(0, 800)}`);
+    throw new Error(`Gemini failed: ${message.slice(0, 800)}`);
   }
-  return JSON.parse(text);
+  const parsed = JSON.parse(text);
+  const output = extractGeminiText(parsed);
+  if (!output) throw new Error("Gemini returned no structured plan.");
+  return output;
+}
+
+async function callOpenAI(parts: PlannerPart[], model: string): Promise<string> {
+  const content = parts.map((part) => {
+    if ("text" in part) return { type: "input_text", text: part.text };
+    return {
+      type: "input_image",
+      image_url: `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`,
+      detail: "high",
+    };
+  });
+
+  const response = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${config.OPENAI_API_KEY!}`,
+    },
+    body: JSON.stringify({
+      model,
+      instructions: systemInstruction(),
+      input: [{ role: "user", content }],
+      max_output_tokens: 32768,
+      text: {
+        format: {
+          type: "json_schema",
+          name: "ltx_director_plan",
+          strict: true,
+          schema: RESPONSE_SCHEMA,
+        },
+      },
+    }),
+    signal: AbortSignal.timeout(180_000),
+  });
+
+  const text = await response.text();
+  if (!response.ok) {
+    let message = text;
+    try {
+      const parsed = JSON.parse(text);
+      message = parsed?.error?.message ?? parsed?.error?.code ?? text;
+    } catch {
+      // Keep original response text.
+    }
+    throw new Error(`OpenAI failed: ${String(message).slice(0, 800)}`);
+  }
+  const parsed = JSON.parse(text);
+  const output = extractOpenAIText(parsed);
+  if (!output) throw new Error("OpenAI returned no structured plan.");
+  return output;
+}
+
+function plannerCandidates(): PlannerCandidate[] {
+  const provider = config.DIRECTOR_PROVIDER;
+  if (provider === "openai") {
+    if (!config.OPENAI_API_KEY) throw new Error("DIRECTOR_PROVIDER=openai but OPENAI_API_KEY is not configured in Render.");
+    return [{ provider: "openai", model: config.OPENAI_DIRECTOR_MODEL }];
+  }
+  if (provider === "gemini") {
+    if (!config.GEMINI_API_KEY) throw new Error("DIRECTOR_PROVIDER=gemini but GEMINI_API_KEY is not configured in Render.");
+    return [{ provider: "gemini", model: config.GEMINI_DIRECTOR_MODEL }];
+  }
+
+  const candidates: PlannerCandidate[] = [];
+  if (config.OPENAI_API_KEY) candidates.push({ provider: "openai", model: config.OPENAI_DIRECTOR_MODEL });
+  if (config.GEMINI_API_KEY) candidates.push({ provider: "gemini", model: config.GEMINI_DIRECTOR_MODEL });
+  if (!candidates.length) {
+    throw new Error("No Director planner is configured. Add OPENAI_API_KEY or GEMINI_API_KEY in Render.");
+  }
+  return candidates;
+}
+
+async function callPlanner(candidate: PlannerCandidate, parts: PlannerPart[]): Promise<string> {
+  return candidate.provider === "openai"
+    ? callOpenAI(parts, candidate.model)
+    : callGemini(parts, candidate.model);
 }
 
 export async function createDirectorPlan(rawRequest: unknown): Promise<LtxDirectorPlan> {
-  if (!config.GEMINI_API_KEY) {
-    throw new Error("GEMINI_API_KEY is not configured in Render. The LTX Director Agent cannot use a fallback planner.");
-  }
-
   const req = DirectorPlanRequestSchema.parse(rawRequest);
   const references = prepareReferences(req);
   const characterReferences = references.filter((reference) => reference.kind === "character" && reference.anchorUrl);
@@ -381,7 +483,7 @@ export async function createDirectorPlan(rawRequest: unknown): Promise<LtxDirect
     throw new Error("Character conditioning is required. Add or approve a character reference before asking the LTX Director Agent to plan the video.");
   }
 
-  const parts: GeminiPart[] = [{ text: requestContext(req, references) }];
+  const parts: PlannerPart[] = [{ text: requestContext(req, references) }];
   const imageReferences = references.filter((reference) => reference.anchorUrl).slice(0, MAX_REFERENCE_IMAGES);
   for (const reference of imageReferences) {
     try {
@@ -397,46 +499,61 @@ export async function createDirectorPlan(rawRequest: unknown): Promise<LtxDirect
     }
   }
 
-  const model = config.GEMINI_DIRECTOR_MODEL;
-  let correction = "";
-  let lastIssues: string[] = [];
-  for (let attempt = 1; attempt <= 2; attempt += 1) {
-    const attemptParts = correction
-      ? [...parts, { text: correction } satisfies GeminiPart]
-      : parts;
-    const response = await callGemini(attemptParts, model);
-    const responseText = extractGeminiText(response);
-    if (!responseText) throw new Error("Gemini Director returned no structured plan.");
+  const providerErrors: string[] = [];
+  for (const candidate of plannerCandidates()) {
+    let correction = "";
+    let lastIssues: string[] = [];
 
-    let parsedJson: unknown;
-    try {
-      parsedJson = JSON.parse(responseText);
-    } catch (error) {
-      if (attempt === 2) throw new Error(`Gemini Director returned invalid JSON: ${String(error)}`);
-      correction = "Your previous answer was not valid JSON. Return only a schema-compliant plan.";
-      continue;
-    }
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      const attemptParts = correction
+        ? [...parts, { text: correction } satisfies PlannerPart]
+        : parts;
 
-    const parsed = GeminiDirectorPlanSchema.safeParse(parsedJson);
-    if (!parsed.success) {
-      lastIssues = parsed.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`);
-    } else {
-      lastIssues = validatePlan(parsed.data, req, references);
-      if (lastIssues.length === 0) {
-        return {
-          ...parsed.data,
-          version: "ltx-director-v1",
-          agentModel: model,
-        };
+      let responseText: string;
+      try {
+        responseText = await callPlanner(candidate, attemptParts);
+      } catch (error) {
+        providerErrors.push(`${candidate.provider}:${candidate.model}: ${error instanceof Error ? error.message : String(error)}`);
+        break;
       }
+
+      let parsedJson: unknown;
+      try {
+        parsedJson = JSON.parse(responseText);
+      } catch (error) {
+        if (attempt === 2) {
+          providerErrors.push(`${candidate.provider}:${candidate.model}: invalid JSON: ${String(error)}`);
+          break;
+        }
+        correction = "Your previous answer was not valid JSON. Return only the complete schema-compliant JSON object.";
+        continue;
+      }
+
+      const parsed = DirectorPlanSchema.safeParse(parsedJson);
+      if (!parsed.success) {
+        lastIssues = parsed.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`);
+      } else {
+        lastIssues = validatePlan(parsed.data, req, references);
+        if (lastIssues.length === 0) {
+          return {
+            ...parsed.data,
+            version: "ltx-director-v1",
+            agentModel: `${candidate.provider}:${candidate.model}`,
+          };
+        }
+      }
+
+      correction = [
+        "Correct the plan and return the complete JSON object again.",
+        "Keep the creative direction vivid and varied while fixing these validation errors:",
+        ...lastIssues.map((issue) => `- ${issue}`),
+      ].join("\n");
     }
 
-    correction = [
-      "Correct the plan and return the complete JSON object again.",
-      "Validation errors:",
-      ...lastIssues.map((issue) => `- ${issue}`),
-    ].join("\n");
+    if (lastIssues.length) {
+      providerErrors.push(`${candidate.provider}:${candidate.model}: ${lastIssues.join("; ")}`);
+    }
   }
 
-  throw new Error(`Gemini Director could not produce a valid LTX plan: ${lastIssues.join("; ")}`);
+  throw new Error(`Director planner failed across all configured providers: ${providerErrors.join(" | ")}`);
 }
