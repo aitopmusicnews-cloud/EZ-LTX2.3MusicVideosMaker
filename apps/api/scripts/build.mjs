@@ -82,6 +82,20 @@ for (const legacyTimelineAssumption of [
   directorDist = directorDist.replace(legacyTimelineAssumption, analyzerTimelineRule);
 }
 
+// Prepare every Director shot for a First-Frame / Last-Frame seed-hunting render
+// workflow without changing the response schema. The two frame intentions live
+// inside continuityNotes, while transition remains the motion bridge instruction.
+const fflfDirection = "For every shot, continuityNotes MUST begin with FIRST FRAME: followed by a concrete visible opening composition, then LAST FRAME: followed by a concrete visible ending composition. Make the two frames compositionally useful for first-frame/last-frame generation, clearly related but visually distinct enough to guide motion. The transition field must describe the visible motion bridge between those frames. Do not invent or prescribe numeric seeds; seed hunting and Multiroll selection happen in the rendering stage after the creative plan is approved.";
+for (const shotPromptRule of [
+  "Each prompt should start with the visible action, then specify subject behavior, environment, camera framing and movement, lighting, color, texture, and how the image changes over the shot.",
+  "Each prompt must start directly with the visible action, then describe gestures, exact character appearance, environment, camera framing and movement, lighting, color, and visible changes during the shot.",
+]) {
+  if (directorDist.includes(shotPromptRule)) {
+    directorDist = directorDist.replace(shotPromptRule, `${shotPromptRule} ${fflfDirection}`);
+    break;
+  }
+}
+
 if (directorDist.includes("temperature: 0.35")) throw new Error("Gemini Director build still contains deprecated temperature configuration.");
 for (const forbidden of ["responseFormat:", "responseMimeType:", "responseJsonSchema:", "responseSchema:"]) {
   if (directorDist.includes(forbidden)) throw new Error(`Gemini Director build still contains unsupported structured-output configuration: ${forbidden}`);
@@ -90,6 +104,7 @@ if (!directorDist.includes("Match this JSON Schema exactly")) throw new Error("G
 if (directorDist.includes("AbortSignal.timeout(180_000)")) throw new Error("Gemini Director build still contains the old three-minute timeout.");
 if (!directorDist.includes("AbortSignal.timeout(600_000)")) throw new Error("Gemini Director build is missing the ten-minute planning timeout.");
 if (directorDist.includes("1-to-5-second LTX clips")) throw new Error("Gemini Director prompt still assumes five-second timeline clips.");
+if (!directorDist.includes("continuityNotes MUST begin with FIRST FRAME:")) throw new Error("Director build is missing the FFLF shot-planning contract.");
 await writeFile(directorDistPath, directorDist, "utf8");
 
 // Register routes whose implementation files are compiled by tsc but are kept
@@ -142,4 +157,4 @@ if (!serverDist.includes('/api/videos/stitch')) throw new Error("Compiled API is
 if (!serverDist.includes('/api/social/export')) throw new Error("Compiled API is missing /api/social/export.");
 await writeFile(serverDistPath, serverDist, "utf8");
 
-console.log("[api build] Compiled Director planning/chat, native LTX Director section rendering, analyzer-length sections, long-section stitching, social exports, and ten-minute planning timeout.");
+console.log("[api build] Compiled Director planning/chat, FFLF shot intent, native LTX Director section rendering, analyzer-length sections, long-section stitching, social exports, and ten-minute planning timeout.");
