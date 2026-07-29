@@ -45,6 +45,10 @@ model_image = (
 @app.cls(
     image=model_image,
     gpu="A100-80GB",
+    # The GPU account has capacity for 10 containers. Modal queues excess
+    # invocations instead of attempting to create more containers than the
+    # available capacity.
+    max_containers=10,
     timeout=1800,
     scaledown_window=300,
     volumes={MODEL_DIR: model_volume, OUTPUT_DIR: output_volume},
