@@ -21,7 +21,7 @@ const Env = z.object({
   MODAL_SECRET: optionalNonEmpty.optional(),
   LTX_DIRECTOR_URL: optionalUrl.optional(),
   LTX_DIRECTOR_TOKEN: optionalNonEmpty.optional(),
-  DIRECTOR_PROVIDER: z.enum(["auto", "openai", "gemini"]).default("auto"),
+  DIRECTOR_PROVIDER: z.enum(["auto", "openai", "gemini"]).default("gemini"),
   OPENAI_API_KEY: optionalNonEmpty.optional(),
   OPENAI_DIRECTOR_MODEL: z.string().trim().min(1).default("gpt-5.1"),
   GEMINI_API_KEY: optionalNonEmpty.optional(),
@@ -98,8 +98,8 @@ if (!config.MODAL_LIPSYNC_URL) {
 }
 if (!config.OPENAI_API_KEY && !config.GEMINI_API_KEY) {
   console.log("INFO: No Director planner API key is configured. Set OPENAI_API_KEY or GEMINI_API_KEY.");
-} else if (!config.OPENAI_API_KEY) {
-  console.log("INFO: OPENAI_API_KEY is missing. Director auto mode will use Gemini only.");
+} else if (!config.GEMINI_API_KEY) {
+  console.log("INFO: GEMINI_API_KEY is missing. The default Gemini Director planner cannot run.");
 }
 
 export type Config = typeof config;
