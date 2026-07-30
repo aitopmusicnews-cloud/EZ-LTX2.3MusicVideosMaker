@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, writeFile, mkdir, cp } from "node:fs/promises";
 import { resolve } from "node:path";
 
 function run(command, args) {
@@ -82,9 +82,6 @@ for (const legacyTimelineAssumption of [
   directorDist = directorDist.replace(legacyTimelineAssumption, analyzerTimelineRule);
 }
 
-// Prepare every Director shot for a First-Frame / Last-Frame seed-hunting render
-// workflow without changing the response schema. The two frame intentions live
-// inside continuityNotes, while transition remains the motion bridge instruction.
 const fflfDirection = "For every shot, continuityNotes MUST begin with FIRST FRAME: followed by a concrete visible opening composition, then LAST FRAME: followed by a concrete visible ending composition. Make the two frames compositionally useful for first-frame/last-frame generation, clearly related but visually distinct enough to guide motion. The transition field must describe the visible motion bridge between those frames. Do not invent or prescribe numeric seeds; seed hunting and Multiroll selection happen in the rendering stage after the creative plan is approved.";
 for (const shotPromptRule of [
   "Each prompt should start with the visible action, then specify subject behavior, environment, camera framing and movement, lighting, color, texture, and how the image changes over the shot.",
@@ -107,9 +104,6 @@ if (directorDist.includes("1-to-5-second LTX clips")) throw new Error("Gemini Di
 if (!directorDist.includes("continuityNotes MUST begin with FIRST FRAME:")) throw new Error("Director build is missing the FFLF shot-planning contract.");
 await writeFile(directorDistPath, directorDist, "utf8");
 
-// Register routes whose implementation files are compiled by tsc but are kept
-// isolated from the legacy one-line server source. Dynamic imports keep this
-// patch small and make missing route wiring fail loudly during the build.
 const serverDistPath = resolve(process.cwd(), "dist/server.js");
 let serverDist = await readFile(serverDistPath, "utf8");
 const routeAnchor = `function sniffMatches(buf, family) {`;
@@ -157,4 +151,13 @@ if (!serverDist.includes('/api/videos/stitch')) throw new Error("Compiled API is
 if (!serverDist.includes('/api/social/export')) throw new Error("Compiled API is missing /api/social/export.");
 await writeFile(serverDistPath, serverDist, "utf8");
 
+// Render runs the API service as the public web service. Copy the Vite output
+// into the API package so the API can serve the frontend at `/` and static
+// assets from the same deployed process.
+const webDist = resolve(process.cwd(), "../../apps/web/dist");
+const apiPublic = resolve(process.cwd(), "public");
+await mkdir(apiPublic, { recursive: true });
+await cp(webDist, apiPublic, { recursive: true, force: true });
+
+console.log("[api build] Copied apps/web/dist into apps/api/public for Render frontend serving.");
 console.log("[api build] Compiled Director planning/chat, FFLF shot intent, native LTX Director section rendering, analyzer-length sections, long-section stitching, social exports, and ten-minute planning timeout.");
