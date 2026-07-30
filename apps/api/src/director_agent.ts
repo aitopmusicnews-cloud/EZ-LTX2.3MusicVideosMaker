@@ -45,9 +45,16 @@ export const DirectorPlanRequestSchema = z.object({
   avoid: z.string().default(""),
   characterRequired: z.boolean().default(false),
   characterImageUrl: z.string().optional(),
+  performerName: z.string().trim().min(1).max(200).optional(),
+  performerAudioUrl: z.string().url().optional(),
+  enableLipSync: z.boolean().default(false),
   analysis: DirectorAnalysisSchema,
   clips: z.array(DirectorClipSchema).min(1).max(80),
   references: z.array(DirectorReferenceSchema).max(20).default([]),
+}).superRefine((req, ctx) => {
+  if (req.enableLipSync && !req.performerAudioUrl) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["performerAudioUrl"], message: "performerAudioUrl is required when lip-sync is enabled" });
+  }
 });
 
 export type DirectorPlanRequest = z.infer<typeof DirectorPlanRequestSchema>;
@@ -75,6 +82,7 @@ const ShotPlanSchema = z.object({
   start: z.number().finite().min(0),
   end: z.number().finite().positive(),
   requiresCharacter: z.boolean(),
+  requiresLipSync: z.boolean(),
   conditioningReferenceId: z.string().nullable(),
   prompt: z.string().min(20),
   continuityNotes: z.string().min(1),
@@ -88,8 +96,10 @@ const DirectorPlanSchema = z.object({
 });
 
 export type LtxDirectorPlan = z.infer<typeof DirectorPlanSchema> & {
-  version: "ltx-director-v1";
+  version: "ltx-director-v2";
   agentModel: string;
+  performer?: { name: string; audioUrl: string };
+  lipSyncEnabled: boolean;
 };
 
 const RESPONSE_SCHEMA = {
@@ -97,89 +107,45 @@ const RESPONSE_SCHEMA = {
   additionalProperties: false,
   properties: {
     treatment: {
-      type: "object",
-      additionalProperties: false,
+      type: "object", additionalProperties: false,
       properties: {
-        title: { type: "string" },
-        logline: { type: "string" },
-        visualStyle: { type: "string" },
-        colorPalette: { type: "string" },
-        cameraLanguage: { type: "string" },
-        continuityStrategy: { type: "string" },
+        title: { type: "string" }, logline: { type: "string" }, visualStyle: { type: "string" },
+        colorPalette: { type: "string" }, cameraLanguage: { type: "string" }, continuityStrategy: { type: "string" },
       },
       required: ["title", "logline", "visualStyle", "colorPalette", "cameraLanguage", "continuityStrategy"],
     },
     characterBible: {
-      type: "object",
-      additionalProperties: false,
+      type: "object", additionalProperties: false,
       properties: {
-        referenceId: { type: ["string", "null"] },
-        referenceSummary: { type: "string" },
-        immutableTraits: { type: "array", items: { type: "string" }, maxItems: 20 },
-        wardrobe: { type: "string" },
+        referenceId: { type: ["string", "null"] }, referenceSummary: { type: "string" },
+        immutableTraits: { type: "array", items: { type: "string" }, maxItems: 20 }, wardrobe: { type: "string" },
         prohibitedChanges: { type: "array", items: { type: "string" }, maxItems: 20 },
       },
       required: ["referenceId", "referenceSummary", "immutableTraits", "wardrobe", "prohibitedChanges"],
     },
     shots: {
-      type: "array",
-      minItems: 1,
-      maxItems: 80,
+      type: "array", minItems: 1, maxItems: 80,
       items: {
-        type: "object",
-        additionalProperties: false,
+        type: "object", additionalProperties: false,
         properties: {
-          clipId: { type: "string" },
-          sectionLabel: { type: "string" },
-          start: { type: "number" },
-          end: { type: "number" },
-          requiresCharacter: { type: "boolean" },
-          conditioningReferenceId: { type: ["string", "null"] },
-          prompt: { type: "string" },
-          continuityNotes: { type: "string" },
-          transition: { type: "string" },
+          clipId: { type: "string" }, sectionLabel: { type: "string" }, start: { type: "number" }, end: { type: "number" },
+          requiresCharacter: { type: "boolean" }, requiresLipSync: { type: "boolean" }, conditioningReferenceId: { type: ["string", "null"] },
+          prompt: { type: "string" }, continuityNotes: { type: "string" }, transition: { type: "string" },
         },
-        required: [
-          "clipId",
-          "sectionLabel",
-          "start",
-          "end",
-          "requiresCharacter",
-          "conditioningReferenceId",
-          "prompt",
-          "continuityNotes",
-          "transition",
-        ],
+        required: ["clipId", "sectionLabel", "start", "end", "requiresCharacter", "requiresLipSync", "conditioningReferenceId", "prompt", "continuityNotes", "transition"],
       },
     },
   },
   required: ["treatment", "characterBible", "shots"],
 } as const;
 
-type PlannerPart =
-  | { text: string }
-  | { inlineData: { mimeType: string; data: string } };
-
-type PreparedReference = {
-  id: string;
-  kind: z.infer<typeof ReferenceKind>;
-  media: z.infer<typeof ReferenceMedia>;
-  name: string;
-  note?: string;
-  anchorUrl?: string;
-};
-
-type PlannerCandidate = {
-  provider: "openai" | "gemini";
-  model: string;
-};
+type PlannerPart = { text: string } | { inlineData: { mimeType: string; data: string } };
+type PreparedReference = { id: string; kind: z.infer<typeof ReferenceKind>; media: z.infer<typeof ReferenceMedia>; name: string; note?: string; anchorUrl?: string };
+type PlannerCandidate = { provider: "openai" | "gemini"; model: string };
 
 const MAX_REFERENCE_IMAGES = 10;
 const MAX_REFERENCE_BYTES = 12 * 1024 * 1024;
-
-function wordCount(text: string): number {
-  return text.trim().split(/\s+/).filter(Boolean).length;
-}
+function wordCount(text: string): number { return text.trim().split(/\s+/).filter(Boolean).length; }
 
 function systemInstruction(): string {
   return [
@@ -196,6 +162,7 @@ function systemInstruction(): string {
     "Each prompt should start with the visible action, then specify subject behavior, environment, camera framing and movement, lighting, color, texture, and how the image changes over the shot.",
     "Do not use screenplay headings, bullet points, unsupported model parameters, or empty marketing language inside LTX prompts.",
     "Character continuity is an asset-conditioning problem. Set requiresCharacter=true only when a real character reference ID is supplied and the shot should use it; otherwise set requiresCharacter=false and conditioningReferenceId=null.",
+    "When lip-sync is enabled, set requiresLipSync=true only for shots that visibly feature the named performer singing or speaking to camera. Those shots must also have requiresCharacter=true. Set requiresLipSync=false for narrative, abstract, environmental, and non-performance shots.",
     "Never invent reference IDs or claim identity is locked without a real conditioning asset.",
     "When a character reference exists, repeat only the most important immutable facial, hair, wardrobe, and accessory traits needed for that shot.",
     "Use uploaded style, location, character, and shot references as visual evidence. Use user notes as requirements.",
@@ -206,29 +173,13 @@ function systemInstruction(): string {
 
 function requestContext(req: DirectorPlanRequest, references: PreparedReference[]): string {
   return JSON.stringify({
-    task: "Create the final editable LTX-2.3 treatment, character bible, and clip-by-clip production prompts. Maximize visual originality while preserving exact timeline clip IDs and timing.",
-    song: {
-      id: req.songId,
-      filename: req.songFilename,
-      bpm: req.analysis.bpm ?? null,
-      key: req.analysis.key ?? null,
-      duration: req.analysis.duration,
-      sections: req.analysis.sections ?? [],
-    },
+    task: "Create the final editable LTX-2.3 treatment, character bible, and clip-by-clip production prompts. Mark only genuine performer singing/speaking shots for LipDub.",
+    song: { id: req.songId, filename: req.songFilename, bpm: req.analysis.bpm ?? null, key: req.analysis.key ?? null, duration: req.analysis.duration, sections: req.analysis.sections ?? [] },
     creativeDirection: {
-      vision: req.vision,
-      mustInclude: req.mustInclude,
-      avoid: req.avoid,
-      characterRequired: req.characterRequired,
+      vision: req.vision, mustInclude: req.mustInclude, avoid: req.avoid, characterRequired: req.characterRequired,
+      performer: req.performerName ?? null, lipSyncEnabled: req.enableLipSync,
     },
-    validReferenceIds: references.map((reference) => ({
-      id: reference.id,
-      kind: reference.kind,
-      media: reference.media,
-      name: reference.name,
-      note: reference.note ?? "",
-      hasImageCondition: Boolean(reference.anchorUrl),
-    })),
+    validReferenceIds: references.map((reference) => ({ id: reference.id, kind: reference.kind, media: reference.media, name: reference.name, note: reference.note ?? "", hasImageCondition: Boolean(reference.anchorUrl) })),
     exactTimelineClips: req.clips,
   }, null, 2);
 }
@@ -242,18 +193,13 @@ async function loadImagePart(rawUrl: string): Promise<{ mimeType: string; data: 
     if (!detected.startsWith("image/")) throw new Error("reference asset is not an image");
     return { mimeType: detected, data: bytes.toString("base64") };
   }
-
   let playable = await storage.playableUrl(rawUrl);
   if (playable.startsWith("/")) {
     if (!config.PUBLIC_BASE_URL) throw new Error("PUBLIC_BASE_URL is required to load relative reference images");
     playable = new URL(playable, `${config.PUBLIC_BASE_URL.replace(/\/$/, "")}/`).toString();
   }
-
   await assertSafeHost(playable);
-  const response = await fetch(playable, {
-    redirect: "follow",
-    signal: AbortSignal.timeout(25_000),
-  });
+  const response = await fetch(playable, { redirect: "follow", signal: AbortSignal.timeout(25_000) });
   if (!response.ok) throw new Error(`reference image returned ${response.status}`);
   const contentLength = Number(response.headers.get("content-length") ?? 0);
   if (contentLength > MAX_REFERENCE_BYTES) throw new Error("reference image exceeds 12 MB");
@@ -265,76 +211,39 @@ async function loadImagePart(rawUrl: string): Promise<{ mimeType: string; data: 
 }
 
 function prepareReferences(req: DirectorPlanRequest): PreparedReference[] {
-  const references: PreparedReference[] = req.references.map((reference) => ({
-    id: reference.id,
-    kind: reference.kind,
-    media: reference.media,
-    name: reference.name,
-    note: reference.note,
-    anchorUrl: reference.anchorUrl,
-  }));
-
+  const references: PreparedReference[] = req.references.map((reference) => ({ id: reference.id, kind: reference.kind, media: reference.media, name: reference.name, note: reference.note, anchorUrl: reference.anchorUrl }));
   if (req.characterImageUrl && !references.some((reference) => reference.anchorUrl === req.characterImageUrl)) {
-    references.unshift({
-      id: "store-character",
-      kind: "character",
-      media: "image",
-      name: "Approved project character",
-      note: "Use this exact person as the principal recording artist.",
-      anchorUrl: req.characterImageUrl,
-    });
+    references.unshift({ id: "store-character", kind: "character", media: "image", name: req.performerName ? `Approved ${req.performerName} character` : "Approved project character", note: req.performerName ? `Use this exact person as ${req.performerName}, the principal recording artist.` : "Use this exact person as the principal recording artist.", anchorUrl: req.characterImageUrl });
   }
-
   return references;
 }
 
-function validatePlan(
-  plan: z.infer<typeof DirectorPlanSchema>,
-  req: DirectorPlanRequest,
-  references: PreparedReference[],
-): string[] {
+function validatePlan(plan: z.infer<typeof DirectorPlanSchema>, req: DirectorPlanRequest, references: PreparedReference[]): string[] {
   const issues: string[] = [];
   const clipById = new Map(req.clips.map((clip) => [clip.id, clip]));
   const validReferenceIds = new Set(references.filter((reference) => reference.anchorUrl).map((reference) => reference.id));
   const seen = new Set<string>();
-
   for (const shot of plan.shots) {
     const clip = clipById.get(shot.clipId);
-    if (!clip) {
-      issues.push(`unknown clipId ${shot.clipId}`);
-      continue;
-    }
+    if (!clip) { issues.push(`unknown clipId ${shot.clipId}`); continue; }
     if (seen.has(shot.clipId)) issues.push(`duplicate clipId ${shot.clipId}`);
     seen.add(shot.clipId);
-    if (Math.abs(shot.start - clip.start) > 0.05 || Math.abs(shot.end - clip.end) > 0.05) {
-      issues.push(`shot ${shot.clipId} must keep exact times ${clip.start}-${clip.end}`);
-    }
+    if (Math.abs(shot.start - clip.start) > 0.05 || Math.abs(shot.end - clip.end) > 0.05) issues.push(`shot ${shot.clipId} must keep exact times ${clip.start}-${clip.end}`);
     const words = wordCount(shot.prompt);
     if (words > 200) issues.push(`shot ${shot.clipId} prompt has ${words} words; maximum is 200`);
     if (shot.requiresCharacter) {
       if (!shot.conditioningReferenceId) issues.push(`shot ${shot.clipId} requires a character reference ID`);
-      else if (!validReferenceIds.has(shot.conditioningReferenceId)) {
-        issues.push(`shot ${shot.clipId} uses invalid conditioning reference ${shot.conditioningReferenceId}`);
-      }
-    } else if (shot.conditioningReferenceId && !validReferenceIds.has(shot.conditioningReferenceId)) {
-      issues.push(`shot ${shot.clipId} uses invalid conditioning reference ${shot.conditioningReferenceId}`);
+      else if (!validReferenceIds.has(shot.conditioningReferenceId)) issues.push(`shot ${shot.clipId} uses invalid conditioning reference ${shot.conditioningReferenceId}`);
+    } else if (shot.conditioningReferenceId && !validReferenceIds.has(shot.conditioningReferenceId)) issues.push(`shot ${shot.clipId} uses invalid conditioning reference ${shot.conditioningReferenceId}`);
+    if (shot.requiresLipSync) {
+      if (!req.enableLipSync) issues.push(`shot ${shot.clipId} requests lip-sync but lip-sync is disabled`);
+      if (!req.performerAudioUrl) issues.push(`shot ${shot.clipId} requests lip-sync but performer audio is missing`);
+      if (!shot.requiresCharacter) issues.push(`shot ${shot.clipId} requests lip-sync but does not require a character`);
     }
   }
-
-  for (const clip of req.clips) {
-    if (!seen.has(clip.id)) issues.push(`missing shot for clipId ${clip.id}`);
-  }
-
-  if (plan.shots.length !== req.clips.length) {
-    issues.push(`expected ${req.clips.length} shots but received ${plan.shots.length}`);
-  }
-
-  if (req.characterRequired) {
-    if (!plan.characterBible.referenceId || !validReferenceIds.has(plan.characterBible.referenceId)) {
-      issues.push("characterBible.referenceId must use the supplied character conditioning asset");
-    }
-  }
-
+  for (const clip of req.clips) if (!seen.has(clip.id)) issues.push(`missing shot for clipId ${clip.id}`);
+  if (plan.shots.length !== req.clips.length) issues.push(`expected ${req.clips.length} shots but received ${plan.shots.length}`);
+  if (req.characterRequired && (!plan.characterBible.referenceId || !validReferenceIds.has(plan.characterBible.referenceId))) issues.push("characterBible.referenceId must use the supplied character conditioning asset");
   return issues;
 }
 
@@ -355,134 +264,49 @@ function extractOpenAIText(payload: unknown): string {
   for (const item of output) {
     const content = item?.content;
     if (!Array.isArray(content)) continue;
-    for (const part of content) {
-      if (typeof part?.text === "string") text.push(part.text);
-    }
+    for (const part of content) if (typeof part?.text === "string") text.push(part.text);
   }
   return text.join("").trim();
 }
 
 async function callGemini(parts: PlannerPart[], model: string): Promise<string> {
   const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
-  const response = await fetch(endpoint, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "x-goog-api-key": config.GEMINI_API_KEY!,
-    },
-    body: JSON.stringify({
-      systemInstruction: { parts: [{ text: systemInstruction() }] },
-      contents: [{ role: "user", parts }],
-      generationConfig: {
-        temperature: 0.8,
-        maxOutputTokens: 32768,
-        responseMimeType: "application/json",
-        responseJsonSchema: RESPONSE_SCHEMA,
-      },
-    }),
-    signal: AbortSignal.timeout(180_000),
-  });
-
+  const response = await fetch(endpoint, { method: "POST", headers: { "content-type": "application/json", "x-goog-api-key": config.GEMINI_API_KEY! }, body: JSON.stringify({ systemInstruction: { parts: [{ text: systemInstruction() }] }, contents: [{ role: "user", parts }], generationConfig: { temperature: 0.8, maxOutputTokens: 32768, responseMimeType: "application/json", responseJsonSchema: RESPONSE_SCHEMA } }), signal: AbortSignal.timeout(180_000) });
   const text = await response.text();
-  if (!response.ok) {
-    let message = text;
-    try {
-      message = JSON.parse(text)?.error?.message ?? text;
-    } catch {
-      // Keep original response text.
-    }
-    throw new Error(`Gemini failed: ${message.slice(0, 800)}`);
-  }
-  const parsed = JSON.parse(text);
-  const output = extractGeminiText(parsed);
+  if (!response.ok) { let message = text; try { message = JSON.parse(text)?.error?.message ?? text; } catch {} throw new Error(`Gemini failed: ${message.slice(0, 800)}`); }
+  const output = extractGeminiText(JSON.parse(text));
   if (!output) throw new Error("Gemini returned no structured plan.");
   return output;
 }
 
 async function callOpenAI(parts: PlannerPart[], model: string): Promise<string> {
-  const content = parts.map((part) => {
-    if ("text" in part) return { type: "input_text", text: part.text };
-    return {
-      type: "input_image",
-      image_url: `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`,
-      detail: "high",
-    };
-  });
-
-  const response = await fetch("https://api.openai.com/v1/responses", {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${config.OPENAI_API_KEY!}`,
-    },
-    body: JSON.stringify({
-      model,
-      instructions: systemInstruction(),
-      input: [{ role: "user", content }],
-      max_output_tokens: 32768,
-      text: {
-        format: {
-          type: "json_schema",
-          name: "ltx_director_plan",
-          strict: true,
-          schema: RESPONSE_SCHEMA,
-        },
-      },
-    }),
-    signal: AbortSignal.timeout(180_000),
-  });
-
+  const content = parts.map((part) => "text" in part ? { type: "input_text", text: part.text } : { type: "input_image", image_url: `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`, detail: "high" });
+  const response = await fetch("https://api.openai.com/v1/responses", { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${config.OPENAI_API_KEY!}` }, body: JSON.stringify({ model, instructions: systemInstruction(), input: [{ role: "user", content }], max_output_tokens: 32768, text: { format: { type: "json_schema", name: "ltx_director_plan", strict: true, schema: RESPONSE_SCHEMA } } }), signal: AbortSignal.timeout(180_000) });
   const text = await response.text();
-  if (!response.ok) {
-    let message = text;
-    try {
-      const parsed = JSON.parse(text);
-      message = parsed?.error?.message ?? parsed?.error?.code ?? text;
-    } catch {
-      // Keep original response text.
-    }
-    throw new Error(`OpenAI failed: ${String(message).slice(0, 800)}`);
-  }
-  const parsed = JSON.parse(text);
-  const output = extractOpenAIText(parsed);
+  if (!response.ok) { let message = text; try { const parsed = JSON.parse(text); message = parsed?.error?.message ?? parsed?.error?.code ?? text; } catch {} throw new Error(`OpenAI failed: ${String(message).slice(0, 800)}`); }
+  const output = extractOpenAIText(JSON.parse(text));
   if (!output) throw new Error("OpenAI returned no structured plan.");
   return output;
 }
 
 function plannerCandidates(): PlannerCandidate[] {
   const provider = config.DIRECTOR_PROVIDER;
-  if (provider === "openai") {
-    if (!config.OPENAI_API_KEY) throw new Error("DIRECTOR_PROVIDER=openai but OPENAI_API_KEY is not configured in Render.");
-    return [{ provider: "openai", model: config.OPENAI_DIRECTOR_MODEL }];
-  }
-  if (provider === "gemini") {
-    if (!config.GEMINI_API_KEY) throw new Error("DIRECTOR_PROVIDER=gemini but GEMINI_API_KEY is not configured in Render.");
-    return [{ provider: "gemini", model: config.GEMINI_DIRECTOR_MODEL }];
-  }
-
+  if (provider === "openai") { if (!config.OPENAI_API_KEY) throw new Error("DIRECTOR_PROVIDER=openai but OPENAI_API_KEY is not configured in Render."); return [{ provider: "openai", model: config.OPENAI_DIRECTOR_MODEL }]; }
+  if (provider === "gemini") { if (!config.GEMINI_API_KEY) throw new Error("DIRECTOR_PROVIDER=gemini but GEMINI_API_KEY is not configured in Render."); return [{ provider: "gemini", model: config.GEMINI_DIRECTOR_MODEL }]; }
   const candidates: PlannerCandidate[] = [];
   if (config.OPENAI_API_KEY) candidates.push({ provider: "openai", model: config.OPENAI_DIRECTOR_MODEL });
   if (config.GEMINI_API_KEY) candidates.push({ provider: "gemini", model: config.GEMINI_DIRECTOR_MODEL });
-  if (!candidates.length) {
-    throw new Error("No Director planner is configured. Add OPENAI_API_KEY or GEMINI_API_KEY in Render.");
-  }
+  if (!candidates.length) throw new Error("No Director planner is configured. Add OPENAI_API_KEY or GEMINI_API_KEY in Render.");
   return candidates;
 }
 
-async function callPlanner(candidate: PlannerCandidate, parts: PlannerPart[]): Promise<string> {
-  return candidate.provider === "openai"
-    ? callOpenAI(parts, candidate.model)
-    : callGemini(parts, candidate.model);
-}
+async function callPlanner(candidate: PlannerCandidate, parts: PlannerPart[]): Promise<string> { return candidate.provider === "openai" ? callOpenAI(parts, candidate.model) : callGemini(parts, candidate.model); }
 
 export async function createDirectorPlan(rawRequest: unknown): Promise<LtxDirectorPlan> {
   const req = DirectorPlanRequestSchema.parse(rawRequest);
   const references = prepareReferences(req);
   const characterReferences = references.filter((reference) => reference.kind === "character" && reference.anchorUrl);
-  if (req.characterRequired && characterReferences.length === 0) {
-    throw new Error("Character conditioning is required. Add or approve a character reference before asking the LTX Director Agent to plan the video.");
-  }
-
+  if (req.characterRequired && characterReferences.length === 0) throw new Error("Character conditioning is required. Add or approve a character reference before asking the LTX Director Agent to plan the video.");
   const parts: PlannerPart[] = [{ text: requestContext(req, references) }];
   const imageReferences = references.filter((reference) => reference.anchorUrl).slice(0, MAX_REFERENCE_IMAGES);
   for (const reference of imageReferences) {
@@ -492,68 +316,31 @@ export async function createDirectorPlan(rawRequest: unknown): Promise<LtxDirect
       parts.push({ inlineData: image });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      if (reference.kind === "character" && req.characterRequired) {
-        throw new Error(`The required character reference ${reference.name} could not be read: ${message}`);
-      }
+      if (reference.kind === "character" && req.characterRequired) throw new Error(`The required character reference ${reference.name} could not be read: ${message}`);
       parts.push({ text: `REFERENCE ${reference.id} could not be loaded as an image. Use only its note and metadata. Reason: ${message}` });
     }
   }
-
   const providerErrors: string[] = [];
   for (const candidate of plannerCandidates()) {
     let correction = "";
     let lastIssues: string[] = [];
-
     for (let attempt = 1; attempt <= 2; attempt += 1) {
-      const attemptParts = correction
-        ? [...parts, { text: correction } satisfies PlannerPart]
-        : parts;
-
+      const attemptParts = correction ? [...parts, { text: correction } satisfies PlannerPart] : parts;
       let responseText: string;
-      try {
-        responseText = await callPlanner(candidate, attemptParts);
-      } catch (error) {
-        providerErrors.push(`${candidate.provider}:${candidate.model}: ${error instanceof Error ? error.message : String(error)}`);
-        break;
-      }
-
+      try { responseText = await callPlanner(candidate, attemptParts); }
+      catch (error) { providerErrors.push(`${candidate.provider}:${candidate.model}: ${error instanceof Error ? error.message : String(error)}`); break; }
       let parsedJson: unknown;
-      try {
-        parsedJson = JSON.parse(responseText);
-      } catch (error) {
-        if (attempt === 2) {
-          providerErrors.push(`${candidate.provider}:${candidate.model}: invalid JSON: ${String(error)}`);
-          break;
-        }
-        correction = "Your previous answer was not valid JSON. Return only the complete schema-compliant JSON object.";
-        continue;
-      }
-
+      try { parsedJson = JSON.parse(responseText); }
+      catch (error) { if (attempt === 2) { providerErrors.push(`${candidate.provider}:${candidate.model}: invalid JSON: ${String(error)}`); break; } correction = "Your previous answer was not valid JSON. Return only the complete schema-compliant JSON object."; continue; }
       const parsed = DirectorPlanSchema.safeParse(parsedJson);
-      if (!parsed.success) {
-        lastIssues = parsed.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`);
-      } else {
+      if (!parsed.success) lastIssues = parsed.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`);
+      else {
         lastIssues = validatePlan(parsed.data, req, references);
-        if (lastIssues.length === 0) {
-          return {
-            ...parsed.data,
-            version: "ltx-director-v1",
-            agentModel: `${candidate.provider}:${candidate.model}`,
-          };
-        }
+        if (lastIssues.length === 0) return { ...parsed.data, version: "ltx-director-v2", agentModel: `${candidate.provider}:${candidate.model}`, performer: req.performerName && req.performerAudioUrl ? { name: req.performerName, audioUrl: req.performerAudioUrl } : undefined, lipSyncEnabled: req.enableLipSync };
       }
-
-      correction = [
-        "Correct the plan and return the complete JSON object again.",
-        "Keep the creative direction vivid and varied while fixing these validation errors:",
-        ...lastIssues.map((issue) => `- ${issue}`),
-      ].join("\n");
+      correction = ["Correct the plan and return the complete JSON object again.", "Keep the creative direction vivid and varied while fixing these validation errors:", ...lastIssues.map((issue) => `- ${issue}`)].join("\n");
     }
-
-    if (lastIssues.length) {
-      providerErrors.push(`${candidate.provider}:${candidate.model}: ${lastIssues.join("; ")}`);
-    }
+    if (lastIssues.length) providerErrors.push(`${candidate.provider}:${candidate.model}: ${lastIssues.join("; ")}`);
   }
-
   throw new Error(`Director planner failed across all configured providers: ${providerErrors.join(" | ")}`);
 }
