@@ -41,34 +41,19 @@ function requestPublicBaseUrl(req: any): string { return config.PUBLIC_BASE_URL 
 app.register(cors, { origin: true });
 app.register(rateLimit, { global: false });
 app.register(multipart, { limits: { fileSize: 250 * 1024 * 1024 } });
-
-// Render health checks use /health. Keep both health paths available so the
-// service works with Render's default health-check setting and the API client.
-app.get("/health", async () => ({ ok: true }));
-app.get("/api/health", async () => ({ ok: true }));
-
 const publicDir = resolve(dirname(fileURLToPath(import.meta.url)), "../public");
 if (existsSync(publicDir)) app.register(fastifyStatic, { root: publicDir });
 
-// The production API service also serves the Vite-built web app. The web build
-// is copied to apps/api/public by the root build process. Keep API routes under
-// /api and let the SPA handle all other browser navigation paths.
-const webDistDir = resolve(dirname(fileURLToPath(import.meta.url)), "../../web/dist");
-const webIndexPath = join(webDistDir, "index.html");
-if (existsSync(webDistDir)) {
-  app.register(fastifyStatic, {
-    root: webDistDir,
-    prefix: "/",
-    decorateReply: false,
-  });
-}
+// Register health endpoints before the rest of the API so Render can verify the service immediately.
+const healthHandler = async () => ({ ok: true });
+app.get("/health", healthHandler);
+app.get("/api/health", healthHandler);
 
-// Explicit root route: Render's browser URL must return the React app rather
-// than Fastify's JSON 404. This is intentionally registered after static setup
-// so sendFile is available and the route is unambiguous.
+// Serve the compiled web app from the API service root when the public directory exists.
 app.get("/", async (_req, reply) => {
-  if (!existsSync(webIndexPath)) return reply.code(503).send({ error: "Web app build not found" });
-  return reply.type("text/html").sendFile("index.html", webDistDir);
+  const indexPath = join(publicDir, "index.html");
+  if (!existsSync(indexPath)) return reply.code(404).send({ error: "Web app build not found" });
+  return reply.type("text/html").sendFile("index.html");
 });
 
 app.post("/api/director/plan", async (req, reply) => {
@@ -94,6 +79,7 @@ const modalWebhookHandler = async (req: any, reply: any) => {
   const body = WebhookBody.parse(req.body); const { status, job_id, video_url, image_url, error } = body; const existingJob = await readJobFromDisk(job_id);
   if (!existingJob) return reply.code(404).send({ error: "Job context not found on disk." });
   if (status !== "completed" || (!video_url && !image_url)) { await writeJobToDisk(job_id, { ...existingJob, status: "failed", error: error || "Inference failed on GPU cluster.", updatedAt: Date.now() }); return reply.send({ success: true }); }
+
   if (existingJob.stage === "generation" && existingJob.lipSyncRequested && video_url) {
     const performerAudioUrl = (existingJob as any).performerAudioUrl;
     if (!performerAudioUrl) { await writeJobToDisk(job_id, { ...existingJob, status: "failed", error: "LipDub was requested but performer audio is missing.", updatedAt: Date.now() }); return reply.send({ success: true }); }
@@ -110,12 +96,14 @@ const modalWebhookHandler = async (req: any, reply: any) => {
       return reply.send({ success: true });
     }
   }
+
   if (existingJob.stage === "lipsync" && existingJob.parentJobId) {
     await writeJobToDisk(job_id, { ...existingJob, status: "completed", video_url: video_url ?? existingJob.video_url, updatedAt: Date.now() });
     const parent = await readJobFromDisk(existingJob.parentJobId);
     if (parent) await writeJobToDisk(existingJob.parentJobId, { ...parent, status: "completed", video_url: video_url ?? parent.video_url, updatedAt: Date.now(), stage: "lipsync" });
     return reply.send({ success: true, parentJobId: existingJob.parentJobId });
   }
+
   await writeJobToDisk(job_id, { ...existingJob, status: "completed", video_url: video_url ?? existingJob.video_url, image_url: image_url ?? existingJob.image_url, updatedAt: Date.now() });
   return reply.send({ success: true });
 };
@@ -137,4 +125,5 @@ app.delete("/api/clips/:id", async (req, reply) => { const params = z.object({ i
 const analysisRuns = new Set<Promise<any>>();
 app.post("/api/songs/:id/analyze", async (req, reply) => { const params = z.object({ id: SafeId }).parse(req.params); const body = z.object({ audioUrl: urlOrPath }).parse(req.body); const run = (async () => { try { await clearAnalysisError(params.id); const result = await analyzeFromUrl(params.id, body.audioUrl); await (await import("./storage.js")).writeAnalysis(params.id, result); } catch (error: any) { await writeAnalysisError(params.id, error?.message ?? String(error)); } })(); analysisRuns.add(run); void run.finally(() => analysisRuns.delete(run)); return reply.code(202).send({ status: "pending" }); });
 app.get("/api/health", async () => ({ ok: true }));
+
 const port = Number(config.PORT || 3001); await app.listen({ port, host: "0.0.0.0" });
