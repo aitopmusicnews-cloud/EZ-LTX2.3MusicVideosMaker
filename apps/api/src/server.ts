@@ -113,8 +113,29 @@ app.get("/api/projects", async (_req, reply) => reply.send({ projects: await lis
 app.post("/api/projects", async (req, reply) => { const body = z.object({ id: SafeId, name: z.string().min(1).max(200), state: z.record(z.any()) }).parse(req.body); return reply.send(await saveProject(body.id, body.name, body.state)); });
 app.get("/api/projects/:id", async (req, reply) => reply.send(await loadProject((req.params as any).id)));
 app.delete("/api/projects/:id", async (req, reply) => reply.send(await deleteProject((req.params as any).id)));
-app.get("/api/projects/:id/renders", async (req, reply) => reply.send({ renders: await listRenders((req.params as any).id) }));
-app.post("/api/clips", async (req, reply) => { const body = z.object({ id: SafeId, projectId: SafeId, name: z.string().min(1).max(200), url: z.string().min(1), metadata: z.record(z.any()).optional() }).parse(req.body); return reply.send(await saveClip(body)); });
+app.get("/api/projects/:id/renders", async (req, reply) => reply.send({ renders: await listRenders() }));
+app.post("/api/clips", async (req, reply) => {
+  const body = z.object({
+    id: SafeId,
+    projectId: SafeId,
+    name: z.string().min(1).max(200),
+    url: z.string().min(1),
+    metadata: z.record(z.any()).optional(),
+  }).parse(req.body);
+  const metadata = body.metadata ?? {};
+  return reply.send(await saveClip({
+    id: body.id,
+    name: body.name,
+    videoUrl: body.url,
+    source: typeof metadata.source === "string" ? metadata.source : "unknown",
+    prompt: typeof metadata.prompt === "string" ? metadata.prompt : null,
+    duration: typeof metadata.duration === "number" ? metadata.duration : 0,
+    sectionLabel: typeof metadata.sectionLabel === "string" ? metadata.sectionLabel : null,
+    folderId: body.projectId,
+    model: typeof metadata.model === "string" ? metadata.model : null,
+    generationTaskId: typeof metadata.generationTaskId === "string" ? metadata.generationTaskId : null,
+  }));
+});
 app.get("/api/clips", async (_req, reply) => reply.send({ clips: await listClips() }));
 app.delete("/api/clips/:id", async (req, reply) => reply.send(await deleteClip((req.params as any).id)));
 
