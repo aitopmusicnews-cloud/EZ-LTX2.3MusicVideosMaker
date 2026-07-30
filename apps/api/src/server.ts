@@ -5,7 +5,7 @@ import multipart from "@fastify/multipart";
 import fastifyStatic from "@fastify/static";
 import { z } from "zod";
 import { dirname, join, resolve } from "node:path";
-import { existsSync, statSync, appendFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { config } from "./config.js";
 import { createDirectorPlan } from "./director_agent.js";
@@ -15,18 +15,8 @@ import { imageToVideo, animateLipSync, generateCharacterFrame, readJobFromDisk, 
 import { submitRender, getRenderJob } from "./render_queue.js";
 import type { RenderRequest } from "./render.js";
 import { FfmpegError } from "./ffmpeg.js";
-import {
-  saveProject,
-  listProjects,
-  loadProject,
-  deleteProject,
-  listRenders,
-} from "./projects.js";
-import {
-  saveClip,
-  listClips,
-  deleteClip,
-} from "./clips.js";
+import { saveProject, listProjects, loadProject, deleteProject, listRenders } from "./projects.js";
+import { saveClip, listClips, deleteClip } from "./clips.js";
 import { extractLastFrame } from "./frames.js";
 import { sliceAudio } from "./audio_slice.js";
 import { analyzeVocalTrack } from "./vocal.js";
@@ -35,45 +25,41 @@ import { ImageToVideoRequest, VideoToVideoRequest, LipSyncRequest, TextToImageRe
 const app = Fastify({ logger: true });
 const SafeId = z.string().min(1).max(300).regex(/^[A-Za-z0-9._:-]+$/);
 const urlOrPath = z.string().min(1);
+const publicDir = resolve(dirname(fileURLToPath(import.meta.url)), "../public");
 
 function requestPublicBaseUrl(req: any): string { return config.PUBLIC_BASE_URL || `${req.protocol}://${req.headers.host}`; }
+function resolvePublicUrl(req: any, publicUrl: string): string { if (/^https?:\/\//i.test(publicUrl)) return publicUrl; return `${requestPublicBaseUrl(req)}${publicUrl.startsWith("/") ? "" : "/"}${publicUrl}`; }
+function sniffMatches(buf: Buffer, family: "audio" | "image" | "video"): boolean {
+  if (buf.length < 4) return false;
+  const ascii = (start: number, len: number) => start + len <= buf.length ? buf.subarray(start, start + len).toString("ascii") : "";
+  if (family === "audio") return ascii(0, 3) === "ID3" || ascii(0, 4) === "RIFF" || ascii(0, 4) === "fLaC" || ascii(0, 4) === "OggS" || ascii(4, 4) === "ftyp" || (buf[0] === 0xff && (buf[1] & 0xe0) === 0xe0);
+  if (family === "video") return ascii(4, 4) === "ftyp" || (ascii(0, 4) === "RIFF" && ascii(8, 4) === "AVI ") || ascii(0, 4) === "OggS";
+  return (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) || (buf[0] === 0x89 && ascii(1, 3) === "PNG") || ascii(0, 4) === "GIF8" || (ascii(0, 4) === "RIFF" && ascii(8, 4) === "WEBP");
+}
 
-app.register(cors, { origin: true });
-app.register(rateLimit, { global: false });
-app.register(multipart, { limits: { fileSize: 250 * 1024 * 1024 } });
-const publicDir = resolve(dirname(fileURLToPath(import.meta.url)), "../public");
-if (existsSync(publicDir)) app.register(fastifyStatic, { root: publicDir });
+await app.register(cors, { origin: true });
+await app.register(rateLimit, { global: false });
+await app.register(multipart, { limits: { fileSize: 250 * 1024 * 1024 } });
+if (existsSync(publicDir)) await app.register(fastifyStatic, { root: publicDir });
 
-// Render health check endpoint. Keep a single health route so Fastify cannot fail
-// startup with a duplicate route registration.
+// Keep exactly one Render health endpoint. Do not add /api/health.
 app.get("/health", async () => ({ ok: true }));
+app.get("/", async (_req, reply) => { const indexPath = join(publicDir, "index.html"); if (!existsSync(indexPath)) return reply.code(404).send({ error: "Web app build not found" }); return reply.type("text/html").sendFile("index.html"); });
 
-// Serve the compiled web app from the API service root when the public directory exists.
-app.get("/", async (_req, reply) => {
-  const indexPath = join(publicDir, "index.html");
-  if (!existsSync(indexPath)) return reply.code(404).send({ error: "Web app build not found" });
-  return reply.type("text/html").sendFile("index.html");
-});
+app.post("/api/director/plan", async (req, reply) => { try { return reply.send(await createDirectorPlan(req.body)); } catch (error: any) { const message = error instanceof Error ? error.message : String(error); req.log.error({ err: error }, "LTX Director Agent failed"); return reply.code(message.includes("required") ? 400 : 500).send({ error: message }); } });
 
-app.post("/api/director/plan", async (req, reply) => {
-  try { return reply.send(await createDirectorPlan(req.body)); }
-  catch (error: any) { const message = error instanceof Error ? error.message : String(error); req.log.error({ err: error }, "LTX Director Agent failed"); return reply.code(message.includes("required") ? 400 : 500).send({ error: message }); }
-});
+app.post("/api/images/upload", async (req, reply) => { const file = await req.file(); if (!file) return reply.code(400).send({ error: "no file" }); const buf = await file.toBuffer(); if (!file.mimetype?.startsWith("image/") && !sniffMatches(buf, "image")) return reply.code(400).send({ error: "expected image" }); const { id, publicUrl } = await saveUpload(buf, file.filename, file.mimetype); return reply.send({ id, url: resolvePublicUrl(req, publicUrl) }); });
+app.post("/api/videos/upload", async (req, reply) => { const file = await req.file(); if (!file) return reply.code(400).send({ error: "no file" }); const buf = await file.toBuffer(); if (!file.mimetype?.startsWith("video/") && !sniffMatches(buf, "video")) return reply.code(400).send({ error: "expected video" }); const { id, publicUrl } = await saveUpload(buf, file.filename, file.mimetype); return reply.send({ id, url: resolvePublicUrl(req, publicUrl) }); });
 
-function sniffMatches(buf: Buffer, family: "audio" | "image" | "video"): boolean { if (buf.length < 4) return false; const u = (i: number) => buf.readUInt8(i); const ascii = (start: number, len: number) => start + len <= buf.length ? buf.subarray(start, start + len).toString("ascii") : ""; if (family === "audio") { if (ascii(0, 3) === "ID3") return true; if (u(0) === 0xff && (u(1) & 0xe0) === 0xe0) return true; if (ascii(0, 4) === "RIFF" && ascii(8, 4) === "WAVE") return true; if (ascii(0, 4) === "fLaC") return true; if (ascii(0, 4) === "OggS") return true; if (ascii(4, 4) === "ftyp") return true; return true; } if (family === "video") { if (buf.length >= 8 && ascii(4, 4) === "ftyp") return true; if (buf.length >= 12 && ascii(0, 4) === "RIFF" && ascii(8, 4) === "AVI ") return true; if (buf.length >= 4 && u(0) === 0x1a && u(1) === 0x45 && u(2) === 0xdf && u(3) === 0xa3) return true; if (buf.length >= 4 && ascii(0, 4) === "OggS") return true; return true; } if (u(0) === 0xff && u(1) === 0xd8 && u(2) === 0xff) return true; if (u(0) === 0x89 && ascii(1, 3) === "PNG") return true; if (ascii(0, 4) === "GIF8") return true; if (ascii(0, 4) === "RIFF" && ascii(8, 4) === "WEBP") return true; return true; }
-function resolvePublicUrl(req: any, publicUrl: string): string { let resolved = publicUrl; let hostHeader = (req.headers["x-forwarded-host"] as string) || (req.headers["host"] as string); if (hostHeader) { if (hostHeader.includes(":3001")) hostHeader = hostHeader.replace(":3001", ":3000"); else if (hostHeader === "127.0.0.1" || hostHeader === "localhost") hostHeader = `${hostHeader}:3000`; const isLocal = hostHeader.includes("localhost") || hostHeader.includes("127.0.0.1"); const proto = isLocal ? "http" : "https"; const keyIndex = publicUrl.indexOf("/storage/"); if (keyIndex !== -1) resolved = `${proto}://${hostHeader}${publicUrl.substring(keyIndex)}`; } return resolved; }
+// Song upload is intentionally separate from analysis. The first uploaded MP3 gets an id,
+// then the client calls POST /api/songs/:id/analyze using that id.
+app.post("/api/songs/upload", async (req, reply) => { const file = await req.file(); if (!file) return reply.code(400).send({ error: "no file" }); const buf = await file.toBuffer(); if (!file.mimetype?.startsWith("audio/") && !sniffMatches(buf, "audio")) return reply.code(400).send({ error: "expected audio" }); const { id, publicUrl } = await saveUpload(buf, file.filename, file.mimetype); return reply.send({ id, url: resolvePublicUrl(req, publicUrl), audioUrl: resolvePublicUrl(req, publicUrl) }); });
 
-app.post("/api/images/upload", { config: { rateLimit: { max: 20, timeWindow: "1 minute" } } }, async (req, reply) => { const file = await req.file(); if (!file) return reply.code(400).send({ error: "no file" }); const isImg = file.mimetype?.startsWith("image/") || /\.(png|jpg|jpeg|webp|gif|bmp|svg|tiff|jfif)$/i.test(file.filename); if (!isImg) return reply.code(400).send({ error: `expected image, got ${file.mimetype}` }); const buf = await file.toBuffer(); if (!sniffMatches(buf, "image")) return reply.code(400).send({ error: "file content is not a recognized image format" }); const { id, publicUrl } = await saveUpload(buf, file.filename, file.mimetype); return reply.send({ id, url: resolvePublicUrl(req, publicUrl) }); });
-app.post("/api/videos/upload", { config: { rateLimit: { max: 20, timeWindow: "1 minute" } } }, async (req, reply) => { const file = await req.file(); if (!file) return reply.code(400).send({ error: "no file" }); const isVid = file.mimetype?.startsWith("video/") || /\.(mp4|webm|ogg|mov|avi|mkv|m4v)$/i.test(file.filename); if (!isVid) return reply.code(400).send({ error: `expected video, got ${file.mimetype}` }); const buf = await file.toBuffer(); if (!sniffMatches(buf, "video")) return reply.code(400).send({ error: "file content is not a recognized video format" }); const { id, publicUrl } = await saveUpload(buf, file.filename, file.mimetype); return reply.send({ id, url: resolvePublicUrl(req, publicUrl) }); });
-app.post("/api/songs/upload", { config: { rateLimit: { max: 20, timeWindow: "1 minute" } } }, async (req, reply) => { const file = await req.file(); if (!file) return reply.code(400).send({ error: "no file" }); const isAudio = file.mimetype?.startsWith("audio/") || /\.(mp3|wav|m4a|aac|flac|ogg|oga|opus)$/i.test(file.filename); if (!isAudio) return reply.code(400).send({ error: `expected audio, got ${file.mimetype}` }); const buf = await file.toBuffer(); if (!sniffMatches(buf, "audio")) return reply.code(400).send({ error: "file content is not a recognized audio format" }); const { id, publicUrl } = await saveUpload(buf, file.filename, file.mimetype); return reply.send({ id, url: resolvePublicUrl(req, publicUrl), audioUrl: resolvePublicUrl(req, publicUrl) }); });
-
-// Song analysis lifecycle. Uploading a song only stores the media; analysis is
-// explicitly started by the client so first-time uploads and re-analysis use the
-// same API contract. The result is cached by song id in local storage or S3.
-app.post("/api/songs/:id/analyze", { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } }, async (req, reply) => {
+// This route must exist for first-time uploads as well as re-analysis.
+app.post("/api/songs/:id/analyze", async (req, reply) => {
   const { id } = z.object({ id: SafeId }).parse(req.params);
   const body = z.object({ audioUrl: urlOrPath.optional() }).parse(req.body ?? {});
-  const audioUrl = body.audioUrl || `${requestPublicBaseUrl(req as any)}/storage/uploads/${id}`;
+  const audioUrl = body.audioUrl || `${requestPublicBaseUrl(req)}/storage/uploads/${id}`;
   try {
     await clearAnalysisError(id);
     const analysis = await analyzeFromUrl(id, audioUrl);
@@ -86,86 +72,45 @@ app.post("/api/songs/:id/analyze", { config: { rateLimit: { max: 10, timeWindow:
   }
 });
 
-app.get("/api/songs/:id/analysis", async (req, reply) => {
-  const { id } = z.object({ id: SafeId }).parse(req.params);
-  try {
-    const analysis = await readAnalysis(id);
-    if (analysis) return reply.send({ id, analysis, status: "completed" });
-    const error = await readAnalysisError(id);
-    if (error) return reply.code(500).send({ id, status: "failed", error });
-    return reply.code(404).send({ id, status: "not_found", error: "Song analysis has not been generated yet." });
-  } catch (error: any) {
-    if (error instanceof CorruptAnalysisError) return reply.code(500).send({ id, status: "failed", error: error.message });
-    const message = error instanceof Error ? error.message : String(error);
-    req.log.error({ err: error, songId: id }, "Failed to read song analysis");
-    return reply.code(500).send({ id, status: "failed", error: message });
-  }
-});
+app.get("/api/songs/:id/analysis", async (req, reply) => { const { id } = z.object({ id: SafeId }).parse(req.params); try { const analysis = await readAnalysis(id); if (analysis) return reply.send({ id, analysis, status: "completed" }); const error = await readAnalysisError(id); if (error) return reply.code(500).send({ id, status: "failed", error }); return reply.code(404).send({ id, status: "not_found", error: "Song analysis has not been generated yet." }); } catch (error: any) { if (error instanceof CorruptAnalysisError) return reply.code(500).send({ id, status: "failed", error: error.message }); const message = error instanceof Error ? error.message : String(error); req.log.error({ err: error, songId: id }, "Failed to read song analysis"); return reply.code(500).send({ id, status: "failed", error: message }); } });
 
-app.post("/api/generate/image-to-video", { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } }, async (req, reply) => reply.code(202).send(await imageToVideo(ImageToVideoRequest.parse(req.body), requestPublicBaseUrl(req as any))));
-app.post("/api/generate/video-to-video", async (req, reply) => { try { const body = VideoToVideoRequest.parse(req.body); return reply.code(202).send(await imageToVideo({ prompt: body.prompt, promptText: (body as any).promptText ?? body.prompt, model: body.model, duration: (body as any).duration }, requestPublicBaseUrl(req as any))); } catch (error: any) { return reply.code(500).send({ error: error.message }); } });
-app.post("/api/generate/lip-sync", { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } }, async (req, reply) => reply.send(await animateLipSync(LipSyncRequest.parse(req.body))));
-app.post("/api/generate/text-to-image", { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } }, async (req, reply) => reply.send(await generateCharacterFrame(TextToImageRequest.parse(req.body))));
-app.post("/api/generate/text-to-video", { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } }, async (req, reply) => { const body = TextToVideoRequest.parse(req.body); return reply.code(202).send(await imageToVideo(body, requestPublicBaseUrl(req as any))); });
+app.post("/api/generate/image-to-video", async (req, reply) => reply.code(202).send(await imageToVideo(ImageToVideoRequest.parse(req.body), requestPublicBaseUrl(req))));
+app.post("/api/generate/video-to-video", async (req, reply) => { try { const body = VideoToVideoRequest.parse(req.body); return reply.code(202).send(await imageToVideo({ prompt: body.prompt, promptText: (body as any).promptText ?? body.prompt, model: body.model, duration: (body as any).duration }, requestPublicBaseUrl(req))); } catch (error: any) { return reply.code(500).send({ error: error.message }); } });
+app.post("/api/generate/lip-sync", async (req, reply) => reply.send(await animateLipSync(LipSyncRequest.parse(req.body))));
+app.post("/api/generate/text-to-image", async (req, reply) => reply.send(await generateCharacterFrame(TextToImageRequest.parse(req.body))));
+app.post("/api/generate/text-to-video", async (req, reply) => reply.code(202).send(await imageToVideo(TextToVideoRequest.parse(req.body), requestPublicBaseUrl(req))));
 
 const WebhookBody = z.object({ status: z.enum(["completed", "failed"]), job_id: z.string(), video_url: z.string().url().optional().nullable(), image_url: z.string().url().optional().nullable(), error: z.string().optional().nullable() });
 const modalWebhookHandler = async (req: any, reply: any) => {
   const body = WebhookBody.parse(req.body); const { status, job_id, video_url, image_url, error } = body; const existingJob = await readJobFromDisk(job_id);
   if (!existingJob) return reply.code(404).send({ error: "Job context not found on disk." });
   if (status !== "completed" || (!video_url && !image_url)) { await writeJobToDisk(job_id, { ...existingJob, status: "failed", error: error || "Inference failed on GPU cluster.", updatedAt: Date.now() }); return reply.send({ success: true }); }
-
   if (existingJob.stage === "generation" && existingJob.lipSyncRequested && video_url) {
     const performerAudioUrl = (existingJob as any).performerAudioUrl;
     if (!performerAudioUrl) { await writeJobToDisk(job_id, { ...existingJob, status: "failed", error: "LipDub was requested but performer audio is missing.", updatedAt: Date.now() }); return reply.send({ success: true }); }
-    try {
-      const lipSyncTask = await animateLipSync({ videoUrl: video_url, audioUrl: performerAudioUrl, prompt: existingJob.prompt, parentJobId: job_id });
-      const { id: encodedLipSyncId } = lipSyncTask; const { id: lipSyncJobId } = decodeTaskId(encodedLipSyncId);
-      await writeJobToDisk(job_id, { ...existingJob, status: "running", video_url, updatedAt: Date.now(), lipSyncRequested: true, stage: "generation", modalCallId: existingJob.modalCallId });
-      const child = await readJobFromDisk(lipSyncJobId);
-      if (child) await writeJobToDisk(lipSyncJobId, { ...child, parentJobId: job_id, stage: "lipsync" });
-      return reply.send({ success: true, lipSyncTaskId: encodedLipSyncId });
-    } catch (startError) {
-      const message = startError instanceof Error ? startError.message : String(startError);
-      await writeJobToDisk(job_id, { ...existingJob, status: "failed", video_url, error: `LipDub handoff failed: ${message}`, updatedAt: Date.now() });
-      return reply.send({ success: true });
-    }
+    try { const lipSyncTask = await animateLipSync({ videoUrl: video_url, audioUrl: performerAudioUrl, prompt: existingJob.prompt, parentJobId: job_id }); const { id: encodedLipSyncId } = lipSyncTask; const { id: lipSyncJobId } = decodeTaskId(encodedLipSyncId); await writeJobToDisk(job_id, { ...existingJob, status: "running", video_url, updatedAt: Date.now() }); const child = await readJobFromDisk(lipSyncJobId); if (child) await writeJobToDisk(lipSyncJobId, { ...child, parentJobId: job_id, stage: "lipsync" }); return reply.send({ success: true, lipSyncTaskId: encodedLipSyncId }); } catch (startError) { const message = startError instanceof Error ? startError.message : String(startError); await writeJobToDisk(job_id, { ...existingJob, status: "failed", video_url, error: `LipDub handoff failed: ${message}`, updatedAt: Date.now() }); return reply.send({ success: true }); }
   }
-
-  if (existingJob.stage === "lipsync" && existingJob.parentJobId) {
-    await writeJobToDisk(job_id, { ...existingJob, status: "completed", video_url: video_url ?? existingJob.video_url, updatedAt: Date.now() });
-    const parent = await readJobFromDisk(existingJob.parentJobId);
-    if (parent) await writeJobToDisk(existingJob.parentJobId, { ...parent, status: "completed", video_url: video_url ?? parent.video_url, updatedAt: Date.now(), stage: "lipsync" });
-    return reply.send({ success: true, parentJobId: existingJob.parentJobId });
-  }
-
-  await writeJobToDisk(job_id, { ...existingJob, status: "completed", video_url: video_url ?? existingJob.video_url, image_url: image_url ?? existingJob.image_url, updatedAt: Date.now() });
-  return reply.send({ success: true });
+  if (existingJob.stage === "lipsync" && existingJob.parentJobId) { await writeJobToDisk(job_id, { ...existingJob, status: "completed", video_url: video_url ?? existingJob.video_url, updatedAt: Date.now() }); const parent = await readJobFromDisk(existingJob.parentJobId); if (parent) await writeJobToDisk(existingJob.parentJobId, { ...parent, status: "completed", video_url: video_url ?? parent.video_url, updatedAt: Date.now(), stage: "completed" }); return reply.send({ success: true }); }
+  await writeJobToDisk(job_id, { ...existingJob, status: "completed", video_url, image_url, updatedAt: Date.now() }); return reply.send({ success: true });
 };
-app.post("/api/modal/webhook", modalWebhookHandler); app.post("/api/openrouter/webhook", modalWebhookHandler);
-app.get("/api/tasks/:id", async (req, reply) => { try { const { id: encodedId } = req.params as { id: string }; const { id } = decodeTaskId(encodedId); const job = await readJobFromDisk(id); if (!job) return reply.code(404).send({ error: "Task or job record not found" }); if (job.status === "completed" && (job.video_url || job.image_url)) return reply.send({ id: encodedId, status: "SUCCEEDED", progress: 100, outputUrl: job.video_url ?? job.image_url, output: job.image_url ? { imageUrl: job.image_url, url: job.image_url } : [job.video_url!] }); if (job.status === "failed") return reply.send({ id: encodedId, status: "FAILED", progress: 100, error: job.error || "Generation failed" }); return reply.send({ id: encodedId, status: "IN_PROGRESS", progress: 0 }); } catch (error: any) { return reply.code(400).send({ error: error.message }); } });
+app.post("/api/modal/webhook", modalWebhookHandler);
+app.post("/api/webhooks/modal", modalWebhookHandler);
+
+app.get("/api/tasks/:id", async (req, reply) => { const { id } = z.object({ id: SafeId }).parse(req.params); const job = await readJobFromDisk(id); if (!job) return reply.code(404).send({ error: "Task not found" }); return reply.send(job); });
 app.post("/api/audio/slice", async (req, reply) => { const body = z.object({ audioUrl: urlOrPath, start: z.number().nonnegative(), end: z.number().positive() }).parse(req.body); return reply.send(await sliceAudio(body.audioUrl, body.start, body.end)); });
-app.post("/api/audio/analyze-vocal", async (req, reply) => { const body = z.object({ audioUrl: urlOrPath }).parse(req.body); return reply.send(await analyzeVocalTrack(body.audioUrl)); });
+app.post("/api/audio/vocal-track", async (req, reply) => { const body = z.object({ audioUrl: urlOrPath }).parse(req.body); return reply.send(await analyzeVocalTrack(body.audioUrl)); });
+
 app.get("/api/projects", async (_req, reply) => reply.send({ projects: await listProjects() }));
 app.post("/api/projects", async (req, reply) => { const body = z.object({ id: SafeId, name: z.string().min(1).max(200), state: z.record(z.any()) }).parse(req.body); return reply.send(await saveProject(body.id, body.name, body.state)); });
-app.get("/api/projects/:id", async (req, reply) => { const { id } = z.object({ id: SafeId }).parse(req.params); const project = await loadProject(id); if (!project) return reply.code(404).send({ error: "Project not found" }); return reply.send(project); });
-app.delete("/api/projects/:id", async (req, reply) => { const { id } = z.object({ id: SafeId }).parse(req.params); return reply.send({ deleted: await deleteProject(id) }); });
-app.get("/api/renders", async (_req, reply) => reply.send({ renders: await listRenders() }));
-app.post("/api/renders", async (req, reply) => { try { const result = await submitRender(req.body as RenderRequest); return reply.code(202).send(result); } catch (error: any) { return reply.code(500).send({ error: error.message }); } });
-app.get("/api/renders/:id", async (req, reply) => { const { id } = z.object({ id: SafeId }).parse(req.params); const job = await getRenderJob(id); if (!job) return reply.code(404).send({ error: "Render not found" }); return reply.send(job); });
-app.post("/api/clips", async (req, reply) => { const body = z.object({ id: SafeId, name: z.string().min(1).max(200), videoUrl: z.string().min(1), source: z.string().min(1), prompt: z.string(), duration: z.number().nonnegative(), sectionLabel: z.string(), folderId: z.string().optional(), model: z.string().optional(), generationTaskId: z.string().optional() }).parse(req.body); return reply.send(await saveClip(body)); });
+app.get("/api/projects/:id", async (req, reply) => reply.send(await loadProject((req.params as any).id)));
+app.delete("/api/projects/:id", async (req, reply) => reply.send(await deleteProject((req.params as any).id)));
+app.get("/api/projects/:id/renders", async (_req, reply) => reply.send({ renders: await listRenders() }));
+app.post("/api/clips", async (req, reply) => { const body = z.object({ id: SafeId, projectId: SafeId, name: z.string().min(1).max(200), url: z.string().min(1), metadata: z.record(z.any()).optional() }).parse(req.body); const metadata = body.metadata ?? {}; return reply.send(await saveClip({ id: body.id, name: body.name, videoUrl: body.url, source: typeof metadata.source === "string" ? metadata.source : "unknown", prompt: typeof metadata.prompt === "string" ? metadata.prompt : "", duration: typeof metadata.duration === "number" ? metadata.duration : 0, sectionLabel: typeof metadata.sectionLabel === "string" ? metadata.sectionLabel : "", folderId: body.projectId, model: typeof metadata.model === "string" ? metadata.model : undefined, generationTaskId: typeof metadata.generationTaskId === "string" ? metadata.generationTaskId : undefined })); });
 app.get("/api/clips", async (_req, reply) => reply.send({ clips: await listClips() }));
-app.delete("/api/clips/:id", async (req, reply) => { const { id } = z.object({ id: SafeId }).parse(req.params); return reply.send({ deleted: await deleteClip(id) }); });
-app.get("/api/frames/last", async (req, reply) => { const body = z.object({ videoUrl: urlOrPath }).parse(req.query); return reply.send(await extractLastFrame(body.videoUrl)); });
-app.get("/api/files/:id", async (req, reply) => { const { id } = z.object({ id: SafeId }).parse(req.params); const dir = join(config.STORAGE_DIR, "uploads"); if (!existsSync(dir)) return reply.code(404).send({ error: "File not found" }); const file = (await import("node:fs/promises")).readdir(dir).then(files => files.find(f => f.startsWith(id))); const name = await file; if (!name) return reply.code(404).send({ error: "File not found" }); return reply.send({ id, url: resolvePublicUrl(req, `/storage/uploads/${name}`) }); });
-app.get("/api/songs/:id/file", async (req, reply) => { const { id } = z.object({ id: SafeId }).parse(req.params); const dir = join(config.STORAGE_DIR, "uploads"); if (!existsSync(dir)) return reply.code(404).send({ error: "File not found" }); const files = await (await import("node:fs/promises")).readdir(dir); const name = files.find(f => f.startsWith(id)); if (!name) return reply.code(404).send({ error: "File not found" }); return reply.send({ id, url: resolvePublicUrl(req, `/storage/uploads/${name}`), audioUrl: resolvePublicUrl(req, `/storage/uploads/${name}`) }); });
+app.delete("/api/clips/:id", async (req, reply) => reply.send(await deleteClip((req.params as any).id)));
 
-app.setErrorHandler(async (error, req, reply) => {
-  req.log.error({ err: error }, "Unhandled API error");
-  if (error instanceof FfmpegError) return reply.code(422).send({ error: error.message });
-  if (error instanceof z.ZodError) return reply.code(400).send({ error: "Invalid request", details: error.issues });
-  return reply.code(500).send({ error: error instanceof Error ? error.message : String(error) });
-});
+app.setNotFoundHandler((req, reply) => { if (req.url.startsWith("/api/") || req.url.startsWith("/storage/")) return reply.code(404).send({ error: `Route ${req.method} ${req.url} not found` }); if (req.method === "GET" && existsSync(join(publicDir, "index.html"))) return reply.sendFile("index.html"); return reply.code(404).send({ error: "not found" }); });
+app.setErrorHandler((error: any, req, reply) => { req.log.error({ err: error }, "Unhandled API error"); if (error instanceof FfmpegError) return reply.code(422).send({ error: error.message }); if (error instanceof z.ZodError) return reply.code(400).send({ error: "Invalid request", details: error.issues }); return reply.code(500).send({ error: error instanceof Error ? error.message : String(error) }); });
 
-const port = Number(process.env.PORT || 3001);
-const host = process.env.HOST || "0.0.0.0";
-app.listen({ port, host }).then(() => app.log.info(`API listening on ${host}:${port}`)).catch((err) => { app.log.error(err); process.exit(1); });
+const port = Number(config.PORT || process.env.PORT || 3001);
+await app.listen({ port, host: "0.0.0.0" });
