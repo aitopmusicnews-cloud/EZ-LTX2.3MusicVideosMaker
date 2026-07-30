@@ -114,5 +114,9 @@ app.delete("/api/clips/:id", async (req, reply) => { const params = z.object({ i
 
 const analysisRuns = new Set<Promise<any>>();
 app.post("/api/songs/:id/analyze", async (req, reply) => { const params = z.object({ id: SafeId }).parse(req.params); const body = z.object({ audioUrl: urlOrPath }).parse(req.body); const run = (async () => { try { await clearAnalysisError(params.id); const result = await analyzeFromUrl(params.id, body.audioUrl); await (await import("./storage.js")).writeAnalysis(params.id, result); } catch (error: any) { await writeAnalysisError(params.id, error?.message ?? String(error)); } })(); analysisRuns.add(run); void run.finally(() => analysisRuns.delete(run)); return reply.code(202).send({ status: "pending" }); });
-app.get("/api/health", async () => ({ ok: true }));
+
+const healthHandler = async () => ({ ok: true });
+app.get("/health", healthHandler);
+app.get("/api/health", healthHandler);
+
 const port = Number(config.PORT || 3001); await app.listen({ port, host: "0.0.0.0" });
