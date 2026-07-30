@@ -129,7 +129,7 @@ function estimatedLipSyncProgress(elapsedMs: number): LipSyncProgress {
 
   const current = LIP_SYNC_STAGES[index]!;
   const next = LIP_SYNC_STAGES[index + 1];
-  let percent = current.percent;
+  let percent: number = current.percent;
   if (next) {
     const span = Math.max(1, next.afterMs - current.afterMs);
     const fraction = Math.min(1, Math.max(0, (elapsedMs - current.afterMs) / span));
