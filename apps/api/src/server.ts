@@ -15,6 +15,18 @@ import { imageToVideo, animateLipSync, generateCharacterFrame, readJobFromDisk, 
 import { submitRender, getRenderJob } from "./render_queue.js";
 import type { RenderRequest } from "./render.js";
 import { FfmpegError } from "./ffmpeg.js";
+import {
+  saveProject,
+  listProjects,
+  loadProject,
+  deleteProject,
+  listRenders,
+} from "./projects.js";
+import {
+  saveClip,
+  listClips,
+  deleteClip,
+} from "./clips.js";
 import { extractLastFrame } from "./frames.js";
 import { sliceAudio } from "./audio_slice.js";
 import { analyzeVocalTrack } from "./vocal.js";

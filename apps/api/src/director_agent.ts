@@ -271,7 +271,7 @@ function extractOpenAIText(payload: unknown): string {
 
 async function callGemini(parts: PlannerPart[], model: string): Promise<string> {
   const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
-  const response = await fetch(endpoint, { method: "POST", headers: { "content-type": "application/json", "x-goog-api-key": config.GEMINI_API_KEY! }, body: JSON.stringify({ systemInstruction: { parts: [{ text: systemInstruction() }] }, contents: [{ role: "user", parts }], generationConfig: { temperature: 0.8, maxOutputTokens: 32768, responseMimeType: "application/json", responseJsonSchema: RESPONSE_SCHEMA } }), signal: AbortSignal.timeout(180_000) });
+  const response = await fetch(endpoint, { method: "POST", headers: { "content-type": "application/json", "x-goog-api-key": config.GEMINI_API_KEY! }, body: JSON.stringify({ systemInstruction: { parts: [{ text: systemInstruction() }] }, contents: [{ role: "user", parts }], generationConfig: { temperature: 0.8, maxOutputTokens: 32768 } }), signal: AbortSignal.timeout(180_000) });
   const text = await response.text();
   if (!response.ok) { let message = text; try { message = JSON.parse(text)?.error?.message ?? text; } catch {} throw new Error(`Gemini failed: ${message.slice(0, 800)}`); }
   const output = extractGeminiText(JSON.parse(text));
