@@ -9,7 +9,7 @@ import { existsSync, statSync, appendFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { config } from "./config.js";
 import { createDirectorPlan } from "./director_agent.js";
-import { saveUpload, readAnalysis, writeAnalysisError, readAnalysisError, clearAnalysisError, CorruptAnalysisError } from "./storage.js";
+import { saveUpload, readAnalysis, writeAnalysisError, readAnalysisError, clearAnalysisError, CorruptAnalysisError, playableUrl } from "./storage.js";
 import { analyzeFromUrl } from "./audio.js";
 import { imageToVideo, animateLipSync, generateCharacterFrame, readJobFromDisk, writeJobToDisk, decodeTaskId } from "./modalAI.js";
 import { submitRender, getRenderJob } from "./render_queue.js";
@@ -66,6 +66,42 @@ function resolvePublicUrl(req: any, publicUrl: string): string { let resolved = 
 app.post("/api/images/upload", { config: { rateLimit: { max: 20, timeWindow: "1 minute" } } }, async (req, reply) => { const file = await req.file(); if (!file) return reply.code(400).send({ error: "no file" }); const isImg = file.mimetype?.startsWith("image/") || /\.(png|jpg|jpeg|webp|gif|bmp|svg|tiff|jfif)$/i.test(file.filename); if (!isImg) return reply.code(400).send({ error: `expected image, got ${file.mimetype}` }); const buf = await file.toBuffer(); if (!sniffMatches(buf, "image")) return reply.code(400).send({ error: "file content is not a recognized image format" }); const { id, publicUrl } = await saveUpload(buf, file.filename, file.mimetype); return reply.send({ id, url: resolvePublicUrl(req, publicUrl) }); });
 app.post("/api/videos/upload", { config: { rateLimit: { max: 20, timeWindow: "1 minute" } } }, async (req, reply) => { const file = await req.file(); if (!file) return reply.code(400).send({ error: "no file" }); const isVid = file.mimetype?.startsWith("video/") || /\.(mp4|webm|ogg|mov|avi|mkv|m4v)$/i.test(file.filename); if (!isVid) return reply.code(400).send({ error: `expected video, got ${file.mimetype}` }); const buf = await file.toBuffer(); if (!sniffMatches(buf, "video")) return reply.code(400).send({ error: "file content is not a recognized video format" }); const { id, publicUrl } = await saveUpload(buf, file.filename, file.mimetype); return reply.send({ id, url: resolvePublicUrl(req, publicUrl) }); });
 app.post("/api/songs/upload", { config: { rateLimit: { max: 20, timeWindow: "1 minute" } } }, async (req, reply) => { const file = await req.file(); if (!file) return reply.code(400).send({ error: "no file" }); const isAudio = file.mimetype?.startsWith("audio/") || /\.(mp3|wav|m4a|aac|flac|ogg|oga|opus)$/i.test(file.filename); if (!isAudio) return reply.code(400).send({ error: `expected audio, got ${file.mimetype}` }); const buf = await file.toBuffer(); if (!sniffMatches(buf, "audio")) return reply.code(400).send({ error: "file content is not a recognized audio format" }); const { id, publicUrl } = await saveUpload(buf, file.filename, file.mimetype); return reply.send({ id, url: resolvePublicUrl(req, publicUrl), audioUrl: resolvePublicUrl(req, publicUrl) }); });
+
+// Song analysis lifecycle. Uploading a song only stores the media; analysis is
+// explicitly started by the client so first-time uploads and re-analysis use the
+// same API contract. The result is cached by song id in local storage or S3.
+app.post("/api/songs/:id/analyze", { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } }, async (req, reply) => {
+  const { id } = z.object({ id: SafeId }).parse(req.params);
+  const body = z.object({ audioUrl: urlOrPath.optional() }).parse(req.body ?? {});
+  const audioUrl = body.audioUrl || `${requestPublicBaseUrl(req as any)}/storage/uploads/${id}`;
+  try {
+    await clearAnalysisError(id);
+    const analysis = await analyzeFromUrl(id, audioUrl);
+    return reply.send({ id, analysis, status: "completed" });
+  } catch (error: any) {
+    const message = error instanceof Error ? error.message : String(error);
+    await writeAnalysisError(id, message);
+    req.log.error({ err: error, songId: id }, "Song analysis failed");
+    return reply.code(500).send({ id, status: "failed", error: message });
+  }
+});
+
+app.get("/api/songs/:id/analysis", async (req, reply) => {
+  const { id } = z.object({ id: SafeId }).parse(req.params);
+  try {
+    const analysis = await readAnalysis(id);
+    if (analysis) return reply.send({ id, analysis, status: "completed" });
+    const error = await readAnalysisError(id);
+    if (error) return reply.code(500).send({ id, status: "failed", error });
+    return reply.code(404).send({ id, status: "not_found", error: "Song analysis has not been generated yet." });
+  } catch (error: any) {
+    if (error instanceof CorruptAnalysisError) return reply.code(500).send({ id, status: "failed", error: error.message });
+    const message = error instanceof Error ? error.message : String(error);
+    req.log.error({ err: error, songId: id }, "Failed to read song analysis");
+    return reply.code(500).send({ id, status: "failed", error: message });
+  }
+});
+
 app.post("/api/generate/image-to-video", { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } }, async (req, reply) => reply.code(202).send(await imageToVideo(ImageToVideoRequest.parse(req.body), requestPublicBaseUrl(req as any))));
 app.post("/api/generate/video-to-video", async (req, reply) => { try { const body = VideoToVideoRequest.parse(req.body); return reply.code(202).send(await imageToVideo({ prompt: body.prompt, promptText: (body as any).promptText ?? body.prompt, model: body.model, duration: (body as any).duration }, requestPublicBaseUrl(req as any))); } catch (error: any) { return reply.code(500).send({ error: error.message }); } });
 app.post("/api/generate/lip-sync", { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } }, async (req, reply) => reply.send(await animateLipSync(LipSyncRequest.parse(req.body))));
@@ -111,33 +147,25 @@ app.post("/api/audio/slice", async (req, reply) => { const body = z.object({ aud
 app.post("/api/audio/analyze-vocal", async (req, reply) => { const body = z.object({ audioUrl: urlOrPath }).parse(req.body); return reply.send(await analyzeVocalTrack(body.audioUrl)); });
 app.get("/api/projects", async (_req, reply) => reply.send({ projects: await listProjects() }));
 app.post("/api/projects", async (req, reply) => { const body = z.object({ id: SafeId, name: z.string().min(1).max(200), state: z.record(z.any()) }).parse(req.body); return reply.send(await saveProject(body.id, body.name, body.state)); });
-app.get("/api/projects/:id", async (req, reply) => reply.send(await loadProject((req.params as any).id)));
-app.delete("/api/projects/:id", async (req, reply) => reply.send(await deleteProject((req.params as any).id)));
-app.get("/api/projects/:id/renders", async (req, reply) => reply.send({ renders: await listRenders() }));
-app.post("/api/clips", async (req, reply) => {
-  const body = z.object({
-    id: SafeId,
-    projectId: SafeId,
-    name: z.string().min(1).max(200),
-    url: z.string().min(1),
-    metadata: z.record(z.any()).optional(),
-  }).parse(req.body);
-  const metadata = body.metadata ?? {};
-  return reply.send(await saveClip({
-    id: body.id,
-    name: body.name,
-    videoUrl: body.url,
-    source: typeof metadata.source === "string" ? metadata.source : "unknown",
-    prompt: typeof metadata.prompt === "string" ? metadata.prompt : null,
-    duration: typeof metadata.duration === "number" ? metadata.duration : 0,
-    sectionLabel: typeof metadata.sectionLabel === "string" ? metadata.sectionLabel : null,
-    folderId: body.projectId,
-    model: typeof metadata.model === "string" ? metadata.model : null,
-    generationTaskId: typeof metadata.generationTaskId === "string" ? metadata.generationTaskId : null,
-  }));
-});
+app.get("/api/projects/:id", async (req, reply) => { const { id } = z.object({ id: SafeId }).parse(req.params); const project = await loadProject(id); if (!project) return reply.code(404).send({ error: "Project not found" }); return reply.send(project); });
+app.delete("/api/projects/:id", async (req, reply) => { const { id } = z.object({ id: SafeId }).parse(req.params); return reply.send({ deleted: await deleteProject(id) }); });
+app.get("/api/renders", async (_req, reply) => reply.send({ renders: await listRenders() }));
+app.post("/api/renders", async (req, reply) => { try { const result = await submitRender(req.body as RenderRequest); return reply.code(202).send(result); } catch (error: any) { return reply.code(500).send({ error: error.message }); } });
+app.get("/api/renders/:id", async (req, reply) => { const { id } = z.object({ id: SafeId }).parse(req.params); const job = await getRenderJob(id); if (!job) return reply.code(404).send({ error: "Render not found" }); return reply.send(job); });
+app.post("/api/clips", async (req, reply) => { const body = z.object({ id: SafeId, name: z.string().min(1).max(200), videoUrl: z.string().min(1), source: z.string().min(1), prompt: z.string(), duration: z.number().nonnegative(), sectionLabel: z.string(), folderId: z.string().optional(), model: z.string().optional(), generationTaskId: z.string().optional() }).parse(req.body); return reply.send(await saveClip(body)); });
 app.get("/api/clips", async (_req, reply) => reply.send({ clips: await listClips() }));
-app.delete("/api/clips/:id", async (req, reply) => reply.send(await deleteClip((req.params as any).id)));
+app.delete("/api/clips/:id", async (req, reply) => { const { id } = z.object({ id: SafeId }).parse(req.params); return reply.send({ deleted: await deleteClip(id) }); });
+app.get("/api/frames/last", async (req, reply) => { const body = z.object({ videoUrl: urlOrPath }).parse(req.query); return reply.send(await extractLastFrame(body.videoUrl)); });
+app.get("/api/files/:id", async (req, reply) => { const { id } = z.object({ id: SafeId }).parse(req.params); const dir = join(config.STORAGE_DIR, "uploads"); if (!existsSync(dir)) return reply.code(404).send({ error: "File not found" }); const file = (await import("node:fs/promises")).readdir(dir).then(files => files.find(f => f.startsWith(id))); const name = await file; if (!name) return reply.code(404).send({ error: "File not found" }); return reply.send({ id, url: resolvePublicUrl(req, `/storage/uploads/${name}`) }); });
+app.get("/api/songs/:id/file", async (req, reply) => { const { id } = z.object({ id: SafeId }).parse(req.params); const dir = join(config.STORAGE_DIR, "uploads"); if (!existsSync(dir)) return reply.code(404).send({ error: "File not found" }); const files = await (await import("node:fs/promises")).readdir(dir); const name = files.find(f => f.startsWith(id)); if (!name) return reply.code(404).send({ error: "File not found" }); return reply.send({ id, url: resolvePublicUrl(req, `/storage/uploads/${name}`), audioUrl: resolvePublicUrl(req, `/storage/uploads/${name}`) }); });
 
-const port = Number(process.env.PORT || 3000);
-app.listen({ port, host: "0.0.0.0" }).catch((error) => { app.log.error(error); process.exit(1); });
+app.setErrorHandler(async (error, req, reply) => {
+  req.log.error({ err: error }, "Unhandled API error");
+  if (error instanceof FfmpegError) return reply.code(422).send({ error: error.message });
+  if (error instanceof z.ZodError) return reply.code(400).send({ error: "Invalid request", details: error.issues });
+  return reply.code(500).send({ error: error instanceof Error ? error.message : String(error) });
+});
+
+const port = Number(process.env.PORT || 3001);
+const host = process.env.HOST || "0.0.0.0";
+app.listen({ port, host }).then(() => app.log.info(`API listening on ${host}:${port}`)).catch((err) => { app.log.error(err); process.exit(1); });
