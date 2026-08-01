@@ -75,25 +75,25 @@ export function resumeInflightJobs(): void {
   }
 }
 
-async function resumeClipPoll(clipId: string, taskId: string): Promise<void> {
+async function resumeClipPoll(
+  clipId: string,
+  taskId: string,
+): Promise<void> {
   try {
     const final = await pollTask(taskId, 5000, 900_000);
+
     const currentClip = useStore.getState().clips.find(
-      (item) => item.id === job.clipId,
+      (item) => item.id === clipId,
     );
 
-    // An older Modal task must never replace the result of a newer task.
+    // A resumed older task must never overwrite a newer generation.
     if (
       currentClip?.generationTaskId &&
-      currentClip.generationTaskId !== task.id
+      currentClip.generationTaskId !== taskId
     ) {
-      setJobPatch(jobId, {
-        state: "cancelled",
-        completedAt: Date.now(),
-      });
       console.warn(
-        "Ignoring stale LTX completion",
-        task.id,
+        "Ignoring stale resumed LTX completion",
+        taskId,
         "because the clip now belongs to",
         currentClip.generationTaskId,
       );
@@ -101,8 +101,11 @@ async function resumeClipPoll(clipId: string, taskId: string): Promise<void> {
     }
 
     const videoUrl = taskOutputUrl(final);
+
     if (!taskSucceeded(final) || !videoUrl) {
-      throw new Error(final.error ?? `task ended in ${final.status}`);
+      throw new Error(
+        final.error ?? `task ended in ${final.status} with no video`,
+      );
     }
 
     useStore.getState().updateClip(clipId, {
@@ -110,13 +113,53 @@ async function resumeClipPoll(clipId: string, taskId: string): Promise<void> {
       status: "ready",
       lastError: undefined,
     });
+
     toast.success("Resumed LTX-2.3 clip ready");
 
-    const clip = useStore.getState().clips.find((item) => item.id === clipId);
-    if (clip) void persistGeneratedClip(clip, videoUrl, "resumed");
+    const clip = useStore.getState().clips.find(
+      (item) => item.id === clipId,
+    );
+
+    if (clip) {
+      void persistGeneratedClip(clip, videoUrl, "resumed");
+    }
   } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
-    useStore.getState().updateClip(clipId, { status: "failed", lastError: reason });
+    const reason =
+      error instanceof Error ? error.message : String(error);
+
+    const currentClip = useStore.getState().clips.find(
+      (item) => item.id === clipId,
+    );
+
+    const ownsClip =
+      !currentClip?.generationTaskId ||
+      currentClip.generationTaskId === taskId;
+
+    // Ignore an error from an older task after a newer task took ownership.
+    if (!ownsClip) {
+      console.warn(
+        "Ignoring stale resumed LTX failure",
+        taskId,
+        "because the clip now belongs to",
+        currentClip?.generationTaskId,
+      );
+      return;
+    }
+
+    // Never replace a playable completed video with a late polling error.
+    if (currentClip?.status === "ready" && currentClip.videoUrl) {
+      console.warn(
+        "Ignoring resumed-task error because the clip is already ready:",
+        reason,
+      );
+      return;
+    }
+
+    useStore.getState().updateClip(clipId, {
+      status: "failed",
+      lastError: reason,
+    });
+
     toast.error(`Resumed generation failed: ${reason.slice(0, 80)}`);
   }
 }
