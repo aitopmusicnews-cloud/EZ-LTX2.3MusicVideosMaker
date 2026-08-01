@@ -5,7 +5,7 @@ import { ProjectSnapshot } from "@mvs/shared";
 import type { Job } from "./scheduler.js";
 import { getWs } from "./wavesurfer-ref.js";
 
-export const MAX_CLIP_LEN = 5;
+export const MAX_CLIP_LEN = 20;
 export const MIN_CLIP_LEN = 0.5;
 
 export const ZOOM_MIN = 1;
