@@ -14,9 +14,7 @@
     "start": "npm run start --workspace @mvs/api",
     "preview": "npm run preview --workspace @mvs/web",
     "lint": "npm run typecheck --workspace @mvs/shared && npm run typecheck --workspace @mvs/web && npm run typecheck --workspace @mvs/api",
-    "typecheck": "npm run lint",
-    "test": "npm run test:auth",
-    "test:auth": "npm run test:auth --workspace @mvs/api"
+    "typecheck": "npm run lint"
   },
   "dependencies": {
     "@mvs/shared": "*",

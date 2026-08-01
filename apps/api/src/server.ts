@@ -8,7 +8,6 @@ import { dirname, join, resolve } from "node:path";
 import { existsSync, statSync, appendFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { config } from "./config.js";
-import { isAuthorizedRequest, isPublicAuthRequest, redactSensitiveHeaders } from "./auth.js";
 import { createDirectorPlan } from "./director_agent.js";
 import { saveUpload, readAnalysis, writeAnalysisError, readAnalysisError, clearAnalysisError, CorruptAnalysisError } from "./storage.js";
 import { analyzeFromUrl } from "./audio.js";
@@ -34,20 +33,6 @@ await app.register(cors, { origin: (origin, cb) => { if (!origin) return cb(null
 function requestPublicBaseUrl(req: { headers: Record<string, unknown>; protocol?: string }): string { if (config.PUBLIC_BASE_URL) return config.PUBLIC_BASE_URL.replace(/\/$/, ""); const forwardedProto = String(req.headers["x-forwarded-proto"] ?? "").split(",")[0]?.trim(); const forwardedHost = String(req.headers["x-forwarded-host"] ?? "").split(",")[0]?.trim(); const host = forwardedHost || String(req.headers.host ?? "localhost:3001"); const protocol = forwardedProto || req.protocol || "http"; return `${protocol}://${host}`; }
 await app.register(rateLimit, { max: 200, timeWindow: "1 minute" });
 await app.register(multipart, { limits: { fileSize: 100 * 1024 * 1024 } });
-app.addHook("preHandler", async (req, reply) => {
-  if (isPublicAuthRequest(req.method, req.url)) return;
-
-  const authToken = config.API_AUTH_TOKEN;
-  if (!authToken) return;
-
-  const authorizationHeader =
-    typeof req.headers.authorization === "string" ? req.headers.authorization : undefined;
-  if (isAuthorizedRequest(authorizationHeader, authToken, config.API_AUTH_USERNAME)) return;
-
-  reply.header("WWW-Authenticate", 'Basic realm="Music Video Studio", charset="UTF-8"');
-  reply.header("Cache-Control", "no-store");
-  return reply.code(401).send({ error: "Unauthorized" });
-});
 await app.register(fastifyStatic, { root: join(process.cwd(), config.STORAGE_DIR), prefix: "/storage/", decorateReply: false });
 const __filename = fileURLToPath(import.meta.url); const __dirname = dirname(__filename);
 let webDistResolved: string | null = null;
@@ -57,7 +42,8 @@ const serveSpa = !!(webDistResolved && existsSync(webDistResolved));
 if (serveSpa) await app.register(fastifyStatic, { root: webDistResolved!, prefix: "/", decorateReply: true, wildcard: false });
 app.get("/*", async (req, reply) => { const urlLower = req.url.toLowerCase(); const isApiOrStorage = urlLower.startsWith("/api/") || urlLower.startsWith("/storage/") || urlLower.includes("/api/") || urlLower.includes("/storage/"); if (isApiOrStorage) return reply.code(404).send({ error: `Route ${req.method} ${req.url} not found` }); const distDir = webDistResolved; if (serveSpa && distDir) { const urlPath = req.url.split("?")[0] ?? "/"; const targetFile = join(distDir, urlPath); if (existsSync(targetFile) && statSync(targetFile).isFile()) return reply.sendFile(urlPath); return reply.sendFile("index.html"); } return reply.code(404).send({ error: "not found" }); });
 app.setNotFoundHandler((req, reply) => { const urlLower = req.url.toLowerCase(); const isApiOrStorage = urlLower.startsWith("/api/") || urlLower.startsWith("/storage/") || urlLower.includes("/api/") || urlLower.includes("/storage/"); if (isApiOrStorage) return reply.code(404).send({ error: `Route ${req.method} ${req.url} not found` }); if (req.method === "GET" && serveSpa) return reply.sendFile("index.html"); return reply.code(404).send({ error: "not found" }); });
-app.setErrorHandler((err: any, req, reply) => { try { const errorName = err && typeof err === "object" && "name" in err ? String(err.name) : "Error"; const errorMessage = err && typeof err === "object" && "message" in err ? String(err.message) : String(err); const errorStack = err && typeof err === "object" && "stack" in err ? String(err.stack) : ""; appendFileSync("api-debug.log", `[${new Date().toISOString()}] ${req.method} ${req.url}\nHeaders: ${JSON.stringify(redactSensitiveHeaders(req.headers as Record<string, unknown>))}\nBody: ${JSON.stringify(req.body)}\nError: ${errorName} - ${errorMessage}\nStack: ${errorStack}\n-------------------------------------------\n`, "utf8"); } catch {} if (err instanceof z.ZodError) return reply.code(400).send({ error: err.errors.map((e) => e.message).join("; ") }); if (err instanceof FfmpegError) return reply.code(500).send({ error: err.message }); req.log.error(err); return reply.code(500).send({ error: err instanceof Error ? err.message : String(err) }); });
+app.addHook("preHandler", async (req, reply) => { const authToken = config.API_AUTH_TOKEN; if (authToken && req.url.startsWith("/api/")) { if (req.url === "/api/modal/webhook" || req.url === "/api/openrouter/webhook") return; const authHeader = req.headers.authorization; let token = authHeader?.startsWith("Bearer ") ? authHeader.substring(7) : ""; if (!token) token = (req.query as Record<string, string>)?.token || ""; if (token !== authToken) return reply.code(401).send({ error: "Unauthorized" }); } });
+app.setErrorHandler((err: any, req, reply) => { try { const errorName = err && typeof err === "object" && "name" in err ? String(err.name) : "Error"; const errorMessage = err && typeof err === "object" && "message" in err ? String(err.message) : String(err); const errorStack = err && typeof err === "object" && "stack" in err ? String(err.stack) : ""; appendFileSync("api-debug.log", `[${new Date().toISOString()}] ${req.method} ${req.url}\nHeaders: ${JSON.stringify(req.headers)}\nBody: ${JSON.stringify(req.body)}\nError: ${errorName} - ${errorMessage}\nStack: ${errorStack}\n-------------------------------------------\n`, "utf8"); } catch {} if (err instanceof z.ZodError) return reply.code(400).send({ error: err.errors.map((e) => e.message).join("; ") }); if (err instanceof FfmpegError) return reply.code(500).send({ error: err.message }); req.log.error(err); return reply.code(500).send({ error: err instanceof Error ? err.message : String(err) }); });
 app.get("/health", async () => ({ ok: true }));
 app.post("/api/director/plan", { config: { rateLimit: { max: 6, timeWindow: "1 minute" } } }, async (req, reply) => {
   try {
