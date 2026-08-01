@@ -3,6 +3,7 @@ import type {
   ImageToVideoRequest,
   TextToImageRequest,
   LipSyncRequest,
+  PerformanceRequest,
 } from "@mvs/shared";
 import { config } from "./config.js";
 import { storage } from "./storage.js";
@@ -171,7 +172,7 @@ function s3KeyFromUrl(rawUrl: string): string | null {
   return null;
 }
 
-async function modalMediaPayload(rawUrl: string, kind: "video" | "audio"): Promise<ModalMediaPayload> {
+async function modalMediaPayload(rawUrl: string, kind: "video" | "audio" | "image"): Promise<ModalMediaPayload> {
   const key = s3KeyFromUrl(rawUrl);
   if (!key) return { [`${kind}_url`]: absolutePublicUrl(rawUrl) };
   const client = new S3Client({ region: config.S3_REGION! });
@@ -181,6 +182,93 @@ async function modalMediaPayload(rawUrl: string, kind: "video" | "audio"): Promi
   if (bytes.byteLength > MAX_INLINE_MEDIA_BYTES) throw new Error(`${kind} is too large for the private-media handoff (${Math.ceil(bytes.byteLength / 1024 / 1024)} MB). Use a clip of five seconds or less.`);
   const filename = key.split("/").pop() || `${kind}.bin`;
   return { [`${kind}_base64`]: Buffer.from(bytes).toString("base64"), [`${kind}_filename`]: filename };
+}
+
+/** Generate a new singing/talking performance from a reference image and song section. */
+export async function generatePerformance(req: PerformanceRequest): Promise<ModalTask> {
+  if (!config.MODAL_PERFORMANCE_URL) {
+    throw new Error("MODAL_PERFORMANCE_URL is not configured in Render.");
+  }
+  if (!config.PUBLIC_BASE_URL) {
+    throw new Error("PUBLIC_BASE_URL is required for Modal performance callbacks.");
+  }
+
+  const imageUrl = req.imageUrl;
+  const audioUrl = req.audioUrl;
+  if (!imageUrl) throw new Error("Performance generation requires a reference image.");
+  if (!audioUrl) throw new Error("Performance generation requires a song or vocal track.");
+
+  const prompt = (
+    req.promptText ??
+    req.prompt ??
+    "A cinematic close-up music-video performance. The artist sings the supplied vocal naturally with precise mouth shapes, stable identity, realistic blinks, subtle head movement, and expressive but controlled facial motion."
+  ).trim();
+  const audioStart = Math.max(0, Number(req.audioStart ?? 0));
+  const requestedDuration = req.audioEnd != null
+    ? Number(req.audioEnd) - audioStart
+    : Number(req.duration ?? 5);
+  const duration = Math.min(5, Math.max(1, requestedDuration));
+  const imageStrength = Math.min(1, Math.max(0, Number(req.imageStrength ?? 1)));
+  const loraStrength = Math.min(1.5, Math.max(0, Number(req.loraStrength ?? 1)));
+  const jobId = `performance_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const now = Date.now();
+
+  await writeJobToDisk(jobId, {
+    status: "pending",
+    prompt,
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  try {
+    const [imageMedia, audioMedia] = await Promise.all([
+      modalMediaPayload(imageUrl, "image"),
+      modalMediaPayload(audioUrl, "audio"),
+    ]);
+    const webhookUrl = `${config.PUBLIC_BASE_URL.replace(/\/$/, "")}/api/modal/webhook`;
+    const response = await fetch(config.MODAL_PERFORMANCE_URL, {
+      method: "POST",
+      headers: modalHeaders(),
+      body: JSON.stringify({
+        ...imageMedia,
+        ...audioMedia,
+        prompt,
+        duration,
+        audio_start: audioStart,
+        audio_end: req.audioEnd,
+        aspect_ratio: req.aspectRatio ?? "16:9",
+        image_strength: imageStrength,
+        use_talking_head_lora: req.useTalkingHeadLora ?? false,
+        lora_strength: loraStrength,
+        seed: req.seed,
+        job_id: jobId,
+        webhook_url: webhookUrl,
+      }),
+      signal: AbortSignal.timeout(120_000),
+      redirect: "follow",
+    });
+
+    if (!response.ok) throw new Error(await responseError(response));
+    const accepted = (await response.json().catch(() => ({}))) as { call_id?: string };
+    await writeJobToDisk(jobId, {
+      status: "running",
+      prompt,
+      createdAt: now,
+      updatedAt: Date.now(),
+      modalCallId: accepted.call_id,
+    });
+    return { id: encodeTaskId({ source: "modal", id: jobId }) };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await writeJobToDisk(jobId, {
+      status: "failed",
+      prompt,
+      error: message,
+      createdAt: now,
+      updatedAt: Date.now(),
+    });
+    throw new Error(`Could not start LTX-2.3 audio-driven performance: ${message}`);
+  }
 }
 
 export async function animateLipSync(req: LipSyncRequest): Promise<ModalTask> {

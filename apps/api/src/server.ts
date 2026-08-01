@@ -11,7 +11,7 @@ import { config } from "./config.js";
 import { createDirectorPlan } from "./director_agent.js";
 import { saveUpload, readAnalysis, writeAnalysisError, readAnalysisError, clearAnalysisError, CorruptAnalysisError } from "./storage.js";
 import { analyzeFromUrl } from "./audio.js";
-import { imageToVideo, animateLipSync, generateCharacterFrame, readJobFromDisk, writeJobToDisk, decodeTaskId } from "./modalAI.js";
+import { imageToVideo, generatePerformance, animateLipSync, generateCharacterFrame, readJobFromDisk, writeJobToDisk, decodeTaskId } from "./modalAI.js";
 import { submitRender, getRenderJob } from "./render_queue.js";
 import type { RenderRequest } from "./render.js";
 import { FfmpegError } from "./ffmpeg.js";
@@ -22,7 +22,7 @@ import { saveProject, listProjects, loadProject, deleteProject, listRenders } fr
 import { saveClip, listClips, deleteClip } from "./clips.js";
 import { saveImage, listImages, deleteImage } from "./images.js";
 import { saveFolder, listFolders, deleteFolder } from "./folders.js";
-import { ImageToVideoRequest, VideoToVideoRequest, LipSyncRequest, TextToImageRequest, TextToVideoRequest } from "@mvs/shared";
+import { ImageToVideoRequest, VideoToVideoRequest, PerformanceRequest, LipSyncRequest, TextToImageRequest, TextToVideoRequest } from "@mvs/shared";
 
 const SafeId = z.string().min(1).max(500).regex(/^[a-zA-Z0-9_-]+$/, "id contains invalid characters");
 const urlOrPath = z.string().min(1);
@@ -87,6 +87,7 @@ app.post("/api/songs/upload", { config: { rateLimit: { max: 20, timeWindow: "1 m
 app.get("/api/songs/:id/analysis", async (req, reply) => { const params = z.object({ id: SafeId }).parse(req.params); let analysis; try { analysis = await readAnalysis(params.id); } catch (err) { if (err instanceof CorruptAnalysisError) return reply.send({ status: "failed", error: "corrupt analysis cache" }); throw err; } if (analysis) return reply.send({ status: "ready", analysis }); const errMsg = await readAnalysisError(params.id); if (errMsg) return reply.send({ status: "failed", error: errMsg }); return reply.send({ status: "pending" }); });
 app.post("/api/generate/image-to-video", { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } }, async (req, reply) => reply.code(202).send(await imageToVideo(ImageToVideoRequest.parse(req.body), requestPublicBaseUrl(req as any))));
 app.post("/api/generate/video-to-video", async (req, reply) => { try { const body = VideoToVideoRequest.parse(req.body); return reply.code(202).send(await imageToVideo({ prompt: body.prompt, promptText: (body as any).promptText ?? body.prompt, model: body.model, duration: (body as any).duration }, requestPublicBaseUrl(req as any))); } catch (error: any) { return reply.code(500).send({ error: error.message }); } });
+app.post("/api/generate/performance", { config: { rateLimit: { max: 6, timeWindow: "1 minute" } } }, async (req, reply) => reply.code(202).send(await generatePerformance(PerformanceRequest.parse(req.body))));
 app.post("/api/generate/lip-sync", { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } }, async (req, reply) => reply.send(await animateLipSync(LipSyncRequest.parse(req.body))));
 app.post("/api/generate/text-to-image", { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } }, async (req, reply) => reply.send(await generateCharacterFrame(TextToImageRequest.parse(req.body))));
 app.post("/api/generate/text-to-video", { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } }, async (req, reply) => { const body = TextToVideoRequest.parse(req.body); return reply.code(202).send(await imageToVideo(body, requestPublicBaseUrl(req as any))); });

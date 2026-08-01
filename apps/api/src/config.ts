@@ -16,6 +16,7 @@ const Env = z.object({
   MODAL_LTX_URL: optionalUrl.optional(),
   MODAL_MEDIA_SUITE_URL: optionalUrl.optional(),
   MODAL_LIPSYNC_URL: optionalUrl.optional(),
+  MODAL_PERFORMANCE_URL: optionalUrl.optional(),
   MODAL_FILE_RESOLVER_URL: optionalUrl.optional(),
   MODAL_KEY: optionalNonEmpty.optional(),
   MODAL_SECRET: optionalNonEmpty.optional(),
@@ -87,6 +88,9 @@ if (!config.MODAL_MEDIA_SUITE_URL) {
 }
 if (!config.MODAL_LIPSYNC_URL) {
   console.log("INFO: MODAL_LIPSYNC_URL is missing. Lip-sync is offline.");
+}
+if (!config.MODAL_PERFORMANCE_URL) {
+  console.log("INFO: MODAL_PERFORMANCE_URL is missing. Audio-driven performance generation is offline.");
 }
 if (!config.GEMINI_API_KEY) {
   console.log("INFO: GEMINI_API_KEY is missing. The LTX Director Agent is offline and will not use a fallback planner.");

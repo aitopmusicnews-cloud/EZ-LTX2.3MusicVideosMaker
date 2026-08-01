@@ -187,6 +187,21 @@ export const VideoToVideoRequest = z.object({
 }).passthrough();
 export type VideoToVideoRequest = z.infer<typeof VideoToVideoRequest>;
 
+export const PerformanceRequest = z.object({
+  imageUrl: z.string().min(1),
+  audioUrl: z.string().min(1),
+  audioStart: z.number().min(0).optional(),
+  audioEnd: z.number().positive().optional(),
+  duration: z.number().min(1).max(5).optional(),
+  prompt: z.string().optional(),
+  promptText: z.string().optional(),
+  aspectRatio: z.string().optional(),
+  imageStrength: z.number().min(0).max(1).optional(),
+  useTalkingHeadLora: z.boolean().optional(),
+  loraStrength: z.number().min(0).max(1.5).optional(),
+  seed: z.number().int().optional(),
+}).passthrough();
+export type PerformanceRequest = z.infer<typeof PerformanceRequest>;
 export const LipSyncRequest = z.object({
   imageUrl: z.string().optional(),
   audioUrl: z.string().optional(),

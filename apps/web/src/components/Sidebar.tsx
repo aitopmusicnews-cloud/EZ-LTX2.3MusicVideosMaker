@@ -6,6 +6,7 @@ import {
   extractLastFrame,
   pollTask,
   startLipSync,
+  startPerformance,
   startTextToImage,
 } from "../lib/api.js";
 import { AssetUploader } from "./AssetUploader.js";
@@ -161,6 +162,8 @@ export function Sidebar() {
   const [creatingCharacter, setCreatingCharacter] = useState(false);
   const [characterPrompt, setCharacterPrompt] = useState("");
   const [lipSyncing, setLipSyncing] = useState(false);
+  const [performanceGenerating, setPerformanceGenerating] = useState(false);
+  const [useTalkingHeadLora, setUseTalkingHeadLora] = useState(false);
   const [lipSyncProgress, setLipSyncProgress] = useState<LipSyncProgress | null>(null);
   const [referenceStrength, setReferenceStrength] = useState(1);
   const clip = useMemo(() => clips.find((c) => c.id === selectedId) ?? null, [clips, selectedId]);
@@ -249,6 +252,93 @@ export function Sidebar() {
     }
   };
 
+  const onCreatePerformance = async () => {
+    if (!selectedImage) {
+      toast.warning("Select the artist reference image first");
+      return;
+    }
+    if (!audioUrl) {
+      toast.warning("Load the song before creating a performance");
+      return;
+    }
+    if (clip.status === "queued" || clip.status === "generating") {
+      toast.info("This clip already has a generation in progress");
+      return;
+    }
+
+    const previousVideoUrl = clip.videoUrl;
+    const previousSource = clip.source;
+    const previousModel = clip.model;
+    const performanceDuration = Math.min(5, Math.max(1, durationSec));
+    const fullPrompt = [
+      prompt.trim() || "The artist performs the selected song section directly to camera with accurate singing mouth shapes and stable identity.",
+      cameraPrompt.trim() ? `Camera direction: ${cameraPrompt.trim()}` : "",
+    ].filter(Boolean).join(" ");
+
+    setPerformanceGenerating(true);
+    updateClip(clip.id, {
+      status: "generating",
+      source: "imageToVideo",
+      model: "ltx-2.3-a2vid",
+      generationTaskId: undefined,
+      lastError: undefined,
+    });
+
+    try {
+      toast.info("Starting the audio-driven LTX-2.3 performance…");
+      const task = await startPerformance({
+        imageUrl: selectedImage,
+        audioUrl,
+        audioStart: clip.start,
+        audioEnd: clip.start + performanceDuration,
+        duration: performanceDuration,
+        promptText: fullPrompt,
+        aspectRatio: "16:9",
+        imageStrength: 1,
+        useTalkingHeadLora,
+        loraStrength: 1,
+      });
+      updateClip(clip.id, { generationTaskId: task.id });
+
+      const final = await pollTask(task.id, 5000, 7_200_000);
+      const outputUrl = taskOutputUrl(final);
+      if ((final.status || "").toUpperCase() !== "SUCCEEDED" || !outputUrl) {
+        throw new Error(final.error ?? `Performance generation ended in ${final.status}`);
+      }
+
+      updateClip(clip.id, {
+        videoUrl: outputUrl,
+        source: "imageToVideo",
+        model: "ltx-2.3-a2vid",
+        status: "ready",
+        generationTaskId: undefined,
+        lastError: undefined,
+      });
+
+      try {
+        const { url } = await extractLastFrame(outputUrl);
+        addLookbook(url);
+        updateClip(clip.id, { thumbnailUrl: url });
+      } catch (frameError) {
+        console.warn("Performance completed, but last-frame extraction failed", frameError);
+      }
+
+      toast.success("Audio-driven singing performance ready");
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      updateClip(clip.id, {
+        videoUrl: previousVideoUrl,
+        source: previousSource,
+        model: previousModel,
+        status: previousVideoUrl ? "ready" : "empty",
+        generationTaskId: undefined,
+        lastError: reason,
+      });
+      toast.error(`Performance generation failed: ${reason.slice(0, 140)}`);
+    } finally {
+      setPerformanceGenerating(false);
+    }
+  };
   const onLipSync = async () => {
     if (!clip.videoUrl || clip.status !== "ready") {
       toast.warning("Generate or upload a performance clip before lip-syncing");
@@ -418,6 +508,35 @@ export function Sidebar() {
             onClear={() => updateClip(clip.id, { archetypeUrl: undefined })}
           />
           <div className="select-desc">Upload, generate, or select one image. LTX-2.3 animates it as frame one.</div>
+        </div>
+      )}
+      {source === "imageToVideo" && (
+        <div className="option-group">
+          <div className="label">Singing performance from image + song</div>
+          <div className="select-desc">
+            Uses the selected artist image and this clip's exact song section with LTX-2.3 A2Vid. This creates a new performance; it does not require an existing video.
+          </div>
+          <label style={{ display: "flex", gap: 8, alignItems: "flex-start", fontSize: 12 }}>
+            <input
+              type="checkbox"
+              checked={useTalkingHeadLora}
+              onChange={(event) => setUseTalkingHeadLora(event.target.checked)}
+              disabled={performanceGenerating}
+            />
+            <span>Experimental character-specific talking-head LoRA</span>
+          </label>
+          <div className="select-desc">
+            Leave this off for the official A2Vid audio-driven model. The included community LoRA is tied to its training character and is not cleared for commercial use without permission.
+          </div>
+          <button
+            type="button"
+            className="generate-btn"
+            onClick={onCreatePerformance}
+            disabled={performanceGenerating || clip.status === "generating" || !selectedImage || !audioUrl}
+          >
+            {performanceGenerating ? "Creating singing performance…" : "Create singing performance"}
+          </button>
+          <div className="select-desc">First version generates up to 5 seconds per shot and keeps the regular Image → Video button unchanged.</div>
         </div>
       )}
 
