@@ -111,6 +111,22 @@ const modalWebhookHandler = async (req: any, reply: any) => {
     );
   }
 
+  // A completed video is permanent. Never let a delayed failure
+  // callback replace a successful result.
+  if (existingJob?.status === "completed") {
+    if (status === "failed") {
+      req.log.warn(
+        { jobId: job_id, error },
+        "Ignoring late failure callback for completed Modal job",
+      );
+    }
+
+    return reply.send({
+      success: true,
+      ignored: status === "failed",
+    });
+  }
+
   if (status === "completed" && (video_url || image_url)) {
     await writeJobToDisk(job_id, {
       ...job,

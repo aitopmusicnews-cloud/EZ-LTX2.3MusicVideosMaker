@@ -78,6 +78,28 @@ export function resumeInflightJobs(): void {
 async function resumeClipPoll(clipId: string, taskId: string): Promise<void> {
   try {
     const final = await pollTask(taskId, 5000, 900_000);
+    const currentClip = useStore.getState().clips.find(
+      (item) => item.id === job.clipId,
+    );
+
+    // An older Modal task must never replace the result of a newer task.
+    if (
+      currentClip?.generationTaskId &&
+      currentClip.generationTaskId !== task.id
+    ) {
+      setJobPatch(jobId, {
+        state: "cancelled",
+        completedAt: Date.now(),
+      });
+      console.warn(
+        "Ignoring stale LTX completion",
+        task.id,
+        "because the clip now belongs to",
+        currentClip.generationTaskId,
+      );
+      return;
+    }
+
     const videoUrl = taskOutputUrl(final);
     if (!taskSucceeded(final) || !videoUrl) {
       throw new Error(final.error ?? `task ended in ${final.status}`);
@@ -103,7 +125,11 @@ export function enqueueGeneration(input: EnqueueInput): string {
   const activeForClip = useStore.getState().jobs.filter(
     (job) => job.clipId === input.clipId && (job.state === "queued" || job.state === "running"),
   );
-  for (const job of activeForClip) cancelJob(job.id);
+
+  if (activeForClip.length > 0) {
+    toast.info("This clip is already generating. Keeping the existing GPU job.");
+    return activeForClip[0]!.id;
+  }
 
   let waitForJobId: string | null = null;
   if (input.source === "continue") {
@@ -288,10 +314,47 @@ async function run(jobId: string): Promise<void> {
       ? "The generation service rate limit was reached. Try again shortly."
       : error instanceof Error ? error.message : String(error);
 
-    setJobPatch(jobId, { state: "failed", error: reason, completedAt: Date.now() });
-    useStore.getState().updateClip(job.clipId, { status: "failed", lastError: reason });
-    if (rateLimited) toast.warning(reason, 8000);
-    else toast.error(`LTX-2.3 generation failed: ${reason.slice(0, 120)}`);
+    setJobPatch(jobId, {
+      state: "failed",
+      error: reason,
+      completedAt: Date.now(),
+    });
+
+    const currentJob = useStore.getState().jobs.find(
+      (item) => item.id === jobId,
+    );
+    const currentClip = useStore.getState().clips.find(
+      (item) => item.id === job.clipId,
+    );
+
+    const ownsClip =
+      !currentJob?.taskId ||
+      !currentClip?.generationTaskId ||
+      currentClip.generationTaskId === currentJob.taskId;
+
+    // Never replace a playable completed video with a stale failure.
+    if (!ownsClip) {
+      console.warn(
+        "Ignoring stale LTX failure",
+        currentJob?.taskId,
+        "because the clip belongs to",
+        currentClip?.generationTaskId,
+      );
+    } else if (currentClip?.status === "ready" && currentClip.videoUrl) {
+      console.warn(
+        "LTX task reported a late failure after the clip became ready:",
+        reason,
+      );
+      toast.warning("A late task error was ignored because the video completed.");
+    } else {
+      useStore.getState().updateClip(job.clipId, {
+        status: "failed",
+        lastError: reason,
+      });
+
+      if (rateLimited) toast.warning(reason, 8000);
+      else toast.error(`LTX-2.3 generation failed: ${reason.slice(0, 120)}`);
+    }
   } finally {
     pump();
   }
