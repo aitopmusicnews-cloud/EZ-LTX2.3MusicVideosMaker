@@ -73,7 +73,46 @@ app.post("/api/generate/lip-sync", { config: { rateLimit: { max: 10, timeWindow:
 app.post("/api/generate/text-to-image", { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } }, async (req, reply) => reply.send(await generateCharacterFrame(TextToImageRequest.parse(req.body))));
 app.post("/api/generate/text-to-video", { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } }, async (req, reply) => { const body = TextToVideoRequest.parse(req.body); return reply.code(202).send(await imageToVideo(body, requestPublicBaseUrl(req as any))); });
 const WebhookBody = z.object({ status: z.enum(["completed", "failed"]), job_id: z.string(), video_url: z.string().url().optional().nullable(), image_url: z.string().url().optional().nullable(), error: z.string().optional().nullable() });
-const modalWebhookHandler = async (req: any, reply: any) => { const body = WebhookBody.parse(req.body); const { status, job_id, video_url, image_url, error } = body; const existingJob = await readJobFromDisk(job_id); if (!existingJob) return reply.code(404).send({ error: "Job context not found on disk." }); if (status === "completed" && (video_url || image_url)) { await writeJobToDisk(job_id, { ...existingJob, status: "completed", video_url: video_url ?? existingJob.video_url, image_url: image_url ?? existingJob.image_url, updatedAt: Date.now() }); } else { await writeJobToDisk(job_id, { ...existingJob, status: "failed", error: error || "Inference failed on GPU cluster.", updatedAt: Date.now() }); } return reply.send({ success: true }); };
+const modalWebhookHandler = async (req: any, reply: any) => {
+  const body = WebhookBody.parse(req.body);
+  const { status, job_id, video_url, image_url, error } = body;
+  const now = Date.now();
+
+  const existingJob = await readJobFromDisk(job_id);
+  const job = existingJob ?? {
+    status: "running" as const,
+    prompt: "Recovered Modal generation",
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  if (!existingJob) {
+    req.log.warn(
+      { jobId: job_id },
+      "Recreating missing Modal job context from callback",
+    );
+  }
+
+  if (status === "completed" && (video_url || image_url)) {
+    await writeJobToDisk(job_id, {
+      ...job,
+      status: "completed",
+      video_url: video_url ?? job.video_url,
+      image_url: image_url ?? job.image_url,
+      updatedAt: now,
+    });
+  } else {
+    await writeJobToDisk(job_id, {
+      ...job,
+      status: "failed",
+      error: error || "Inference failed on GPU cluster.",
+      updatedAt: now,
+    });
+  }
+
+  return reply.send({ success: true });
+};
+
 app.post("/api/modal/webhook", modalWebhookHandler); app.post("/api/openrouter/webhook", modalWebhookHandler);
 app.get("/api/tasks/:id", async (req, reply) => { try { const { id: encodedId } = req.params as { id: string }; const { id } = decodeTaskId(encodedId); const job = await readJobFromDisk(id); if (!job) return reply.code(404).send({ error: "Task or job record not found" }); if (job.status === "completed" && (job.video_url || job.image_url)) return reply.send({ id: encodedId, status: "SUCCEEDED", progress: 100, outputUrl: job.video_url ?? job.image_url, output: job.image_url ? { imageUrl: job.image_url, url: job.image_url } : [job.video_url!] }); if (job.status === "failed") return reply.send({ id: encodedId, status: "FAILED", progress: 100, error: job.error || "Generation failed" }); return reply.send({ id: encodedId, status: "IN_PROGRESS", progress: 0 }); } catch (error: any) { return reply.code(400).send({ error: error.message }); } });
 app.post("/api/audio/slice", async (req, reply) => { const body = z.object({ audioUrl: urlOrPath, start: z.number().nonnegative(), end: z.number().positive() }).parse(req.body); return reply.send(await sliceAudio(body.audioUrl, body.start, body.end)); });
