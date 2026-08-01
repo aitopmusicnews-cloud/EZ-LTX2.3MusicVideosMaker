@@ -65,6 +65,24 @@ function sniffMatches(buf: Buffer, family: "audio" | "image" | "video"): boolean
 function resolvePublicUrl(req: any, publicUrl: string): string { let resolved = publicUrl; let hostHeader = (req.headers["x-forwarded-host"] as string) || (req.headers["host"] as string); if (hostHeader) { if (hostHeader.includes(":3001")) hostHeader = hostHeader.replace(":3001", ":3000"); else if (hostHeader === "127.0.0.1" || hostHeader === "localhost") hostHeader = `${hostHeader}:3000`; const isLocal = hostHeader.includes("localhost") || hostHeader.includes("127.0.0.1"); const proto = isLocal ? "http" : "https"; const keyIndex = publicUrl.indexOf("/storage/"); if (keyIndex !== -1) resolved = `${proto}://${hostHeader}${publicUrl.substring(keyIndex)}`; } return resolved; }
 app.post("/api/images/upload", { config: { rateLimit: { max: 20, timeWindow: "1 minute" } } }, async (req, reply) => { const file = await req.file(); if (!file) return reply.code(400).send({ error: "no file" }); const isImg = file.mimetype?.startsWith("image/") || /\.(png|jpg|jpeg|webp|gif|bmp|svg|tiff|jfif)$/i.test(file.filename); if (!isImg) return reply.code(400).send({ error: `expected image, got ${file.mimetype}` }); const buf = await file.toBuffer(); if (!sniffMatches(buf, "image")) return reply.code(400).send({ error: "file content is not a recognized image format" }); const { id, publicUrl } = await saveUpload(buf, file.filename, file.mimetype); return reply.send({ id, url: resolvePublicUrl(req, publicUrl) }); });
 app.post("/api/videos/upload", { config: { rateLimit: { max: 20, timeWindow: "1 minute" } } }, async (req, reply) => { const file = await req.file(); if (!file) return reply.code(400).send({ error: "no file" }); const isVid = file.mimetype?.startsWith("video/") || /\.(mp4|webm|ogg|mov|avi|mkv|m4v)$/i.test(file.filename); if (!isVid) return reply.code(400).send({ error: `expected video, got ${file.mimetype}` }); const buf = await file.toBuffer(); if (!sniffMatches(buf, "video")) return reply.code(400).send({ error: "file content is not a recognized video format" }); const { id, publicUrl } = await saveUpload(buf, file.filename, file.mimetype); return reply.send({ id, url: resolvePublicUrl(req, publicUrl) }); });
+const ExtractLastFrameBody = z.object({
+  videoUrl: urlOrPath,
+  time: z.number().finite().nonnegative().optional(),
+}).strict();
+
+app.post(
+  "/api/videos/extract-last-frame",
+  { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } },
+  async (req, reply) => {
+    const body = ExtractLastFrameBody.parse(req.body);
+    const frame = await extractLastFrame(body.videoUrl, body.time);
+
+    return reply.send({
+      url: resolvePublicUrl(req, frame.url),
+    });
+  },
+);
+
 app.post("/api/songs/upload", { config: { rateLimit: { max: 20, timeWindow: "1 minute" } } }, async (req, reply) => { const file = await req.file(); if (!file) return reply.code(400).send({ error: "no file" }); const isAudio = file.mimetype?.startsWith("audio/") || /\.(mp3|wav|m4a|aac|flac|ogg|oga|opus)$/i.test(file.filename); if (!isAudio) return reply.code(400).send({ error: `expected audio, got ${file.mimetype}` }); const buf = await file.toBuffer(); if (!sniffMatches(buf, "audio")) return reply.code(400).send({ error: "file content is not a recognized audio format" }); const { id, publicUrl } = await saveUpload(buf, file.filename, file.mimetype); return reply.send({ id, url: resolvePublicUrl(req, publicUrl), audioUrl: resolvePublicUrl(req, publicUrl) }); });
 app.get("/api/songs/:id/analysis", async (req, reply) => { const params = z.object({ id: SafeId }).parse(req.params); let analysis; try { analysis = await readAnalysis(params.id); } catch (err) { if (err instanceof CorruptAnalysisError) return reply.send({ status: "failed", error: "corrupt analysis cache" }); throw err; } if (analysis) return reply.send({ status: "ready", analysis }); const errMsg = await readAnalysisError(params.id); if (errMsg) return reply.send({ status: "failed", error: errMsg }); return reply.send({ status: "pending" }); });
 app.post("/api/generate/image-to-video", { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } }, async (req, reply) => reply.code(202).send(await imageToVideo(ImageToVideoRequest.parse(req.body), requestPublicBaseUrl(req as any))));
