@@ -275,31 +275,31 @@ export function EasyWayPromptAssistant({
             </button>
           </div>
 
-          <OptionRow
+          <OptionRow<MusicVideoType>
             label="Video"
             options={VIDEO_TYPES}
             value={videoType}
             onChange={setVideoType}
           />
-          <OptionRow
+          <OptionRow<VisualStyle>
             label="Look"
             options={LOOKS}
             value={visualStyle}
             onChange={setVisualStyle}
           />
-          <OptionRow
+          <OptionRow<PerformanceStyle>
             label="Performance"
             options={PERFORMANCES}
             value={performanceStyle}
             onChange={setPerformanceStyle}
           />
-          <OptionRow
+          <OptionRow<AdlibStyle>
             label="Ad-libs"
             options={ADLIBS}
             value={adlibStyle}
             onChange={setAdlibStyle}
           />
-          <OptionRow
+          <OptionRow<CameraStyle>
             label="Camera"
             options={CAMERAS}
             value={cameraStyle}
