@@ -1,0 +1,16 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "outDir": "./.auth-test-dist",
+    "rootDir": "./src",
+    "noEmit": false,
+    "sourceMap": false,
+    "declaration": false,
+    "incremental": false
+  },
+  "include": [
+    "src/auth.ts",
+    "src/auth.test.ts"
+  ],
+  "exclude": []
+}

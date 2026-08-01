@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { assertProductionAuthConfigured } from "./auth.js";
 
 const optionalUrl = z
   .string()
@@ -11,6 +12,7 @@ const optionalNonEmpty = z
   .pipe(z.string().min(1).optional());
 
 const Env = z.object({
+  NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   LOCAL_INFERENCE_URL: optionalUrl.optional(),
   MODAL_AUDIO_URL: optionalUrl.optional(),
   MODAL_LTX_URL: optionalUrl.optional(),
@@ -22,6 +24,7 @@ const Env = z.object({
   GEMINI_API_KEY: optionalNonEmpty.optional(),
   GEMINI_DIRECTOR_MODEL: z.string().trim().min(1).default("gemini-3.6-flash"),
   API_AUTH_TOKEN: optionalNonEmpty.optional(),
+  API_AUTH_USERNAME: z.string().trim().min(1).max(100).default("admin"),
   PORT: z.coerce.number().default(3001),
   PUBLIC_BASE_URL: optionalUrl.optional(),
   WEB_ORIGIN: z.string().default(""),
@@ -48,6 +51,12 @@ if (!parsed.success) {
 }
 
 const env = parsed.data;
+try {
+  assertProductionAuthConfigured({ nodeEnv: env.NODE_ENV, token: env.API_AUTH_TOKEN });
+} catch (error) {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exit(1);
+}
 const storageRegion = env.S3_REGION ?? env.AWS_REGION;
 let storageBackend = env.STORAGE_BACKEND;
 
