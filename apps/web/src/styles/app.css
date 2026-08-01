@@ -1258,3 +1258,167 @@ body.dragging-resize .resize-handle { background: rgba(255, 107, 0, 0.6); }
 .continuity-status.ready { border-color: rgba(61, 220, 132, 0.35); background: rgba(61, 220, 132, 0.06); }
 .continuity-status.blocked { border-color: rgba(255, 178, 74, 0.35); background: rgba(255, 178, 74, 0.06); }
 .w-full { width: 100%; justify-content: center; }
+
+/* The Easy Way music-video prompt assistant */
+.easy-way-card {
+  margin-bottom: var(--sp-5);
+  border: 1px solid rgba(255, 107, 0, 0.45);
+  border-radius: 12px;
+  overflow: hidden;
+  background:
+    linear-gradient(
+      145deg,
+      rgba(255, 107, 0, 0.08),
+      rgba(255, 107, 0, 0.01) 42%
+    ),
+    var(--surface-2);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.04);
+}
+.easy-way-header {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 48px 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+.easy-way-header:hover {
+  background: rgba(255, 107, 0, 0.05);
+}
+.easy-way-logo {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  box-shadow: 0 3px 12px rgba(0,0,0,0.45);
+}
+.easy-way-header strong {
+  display: block;
+  color: #ff8a32;
+  font-size: 14px;
+  letter-spacing: 0.01em;
+}
+.easy-way-header small {
+  display: block;
+  margin-top: 2px;
+  color: var(--text-dim);
+  font-size: 10px;
+  line-height: 1.35;
+}
+.easy-way-toggle {
+  color: #c7c7cc;
+  font-size: 18px;
+  padding-right: 3px;
+}
+.easy-way-body {
+  padding: 0 10px 12px;
+  border-top: 1px solid rgba(255,255,255,0.05);
+}
+.easy-way-idea-label,
+.easy-way-row-label {
+  display: block;
+  margin: 10px 0 6px;
+  color: var(--text-dim);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.easy-way-idea-label span {
+  color: var(--text-faint);
+  text-transform: none;
+  letter-spacing: normal;
+}
+.easy-way-idea-wrap {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 6px;
+  align-items: stretch;
+}
+.easy-way-idea-wrap textarea {
+  min-width: 0;
+  resize: vertical;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  padding: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12px;
+}
+.easy-way-idea-wrap textarea:focus {
+  border-color: var(--accent);
+}
+.easy-way-mic {
+  min-width: 74px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  padding: 6px 8px;
+  background: var(--surface-3);
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 11px;
+}
+.easy-way-mic:hover {
+  color: var(--text);
+  border-color: var(--accent-dim);
+}
+.easy-way-mic.listening {
+  color: white;
+  border-color: var(--danger);
+  background: rgba(239, 79, 94, 0.18);
+}
+.easy-way-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.easy-way-chip {
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  padding: 5px 8px;
+  background: var(--surface);
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 10px;
+  line-height: 1.2;
+}
+.easy-way-chip:hover {
+  color: var(--text);
+  border-color: rgba(255, 107, 0, 0.55);
+}
+.easy-way-chip.active {
+  color: white;
+  border-color: var(--accent);
+  background: linear-gradient(180deg, #ff7a1a, #c94a00);
+  box-shadow: 0 2px 8px rgba(255, 107, 0, 0.18);
+}
+.easy-way-actions {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 7px;
+  margin-top: 12px;
+}
+.easy-way-make {
+  border: 1px solid #ff8a32;
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: linear-gradient(180deg, #ff7a1a, #d64c00);
+  color: white;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(255, 107, 0, 0.18);
+}
+.easy-way-make:hover {
+  background: linear-gradient(180deg, #ff8f3c, #e45600);
+}
+.easy-way-status {
+  margin-top: 8px;
+  color: var(--text-faint);
+  font-size: 10px;
+  line-height: 1.4;
+}

@@ -11,6 +11,8 @@ import {
 } from "../lib/api.js";
 import { AssetUploader } from "./AssetUploader.js";
 import { toast } from "../lib/toast.js";
+import { EasyWayPromptAssistant } from "./EasyWayPromptAssistant.js";
+import { ensureImageVideoPrompt, ensurePerformancePrompt } from "../lib/musicPromptEnhancer.js";
 
 type LtxSource = "textToVideo" | "imageToVideo" | "continue";
 
@@ -211,9 +213,16 @@ export function Sidebar() {
       return;
     }
 
-    const fullPrompt = [prompt.trim(), cameraPrompt.trim()]
-      .filter(Boolean)
-      .join(". Camera direction: ");
+    const rawPrompt = [
+      prompt.trim(),
+      cameraPrompt.trim(),
+    ].filter(Boolean).join(". Camera direction: ");
+    const fullPrompt = ensureImageVideoPrompt(rawPrompt, {
+      sectionLabel,
+      energy,
+      hasPreviousClip: source === "continue",
+    });
+    updateClip(clip.id, { prompt: fullPrompt });
 
     enqueueGeneration({
       clipId: clip.id,
@@ -270,11 +279,21 @@ export function Sidebar() {
     const previousSource = clip.source;
     const previousModel = clip.model;
     const performanceDuration = Math.min(5, Math.max(1, durationSec));
-    const fullPrompt = [
-      prompt.trim() || "The artist performs the selected song section directly to camera with accurate singing mouth shapes and stable identity.",
-      cameraPrompt.trim() ? `Camera direction: ${cameraPrompt.trim()}` : "",
+    const rawPerformancePrompt = [
+      prompt.trim(),
+      cameraPrompt.trim()
+        ? `Camera direction: ${cameraPrompt.trim()}`
+        : "",
     ].filter(Boolean).join(" ");
-
+    const fullPrompt = ensurePerformancePrompt(
+      rawPerformancePrompt,
+      {
+        sectionLabel,
+        energy,
+        hasPreviousClip: hasPrev,
+      },
+    );
+    updateClip(clip.id, { prompt: fullPrompt });
     setPerformanceGenerating(true);
     updateClip(clip.id, {
       status: "generating",
@@ -551,6 +570,16 @@ export function Sidebar() {
         </div>
       )}
 
+      <EasyWayPromptAssistant
+        prompt={prompt}
+        onPromptChange={(value) =>
+          updateClip(clip.id, { prompt: value })
+        }
+        sectionLabel={sectionLabel}
+        energy={energy}
+        hasPreviousClip={hasPrev}
+        audioLoaded={Boolean(audioUrl)}
+      />
       <div className="option-group">
         <div className="label">{promptLabel}</div>
         <textarea
