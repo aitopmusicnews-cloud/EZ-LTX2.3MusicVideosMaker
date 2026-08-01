@@ -153,15 +153,44 @@ def _write_media(payload: dict[str, Any], kind: str, work_dir: Path) -> Path:
 
 def _send_webhook(webhook_url: str | None, payload: dict[str, Any]) -> None:
     if not webhook_url:
+        print("[LipDub webhook] No callback URL supplied")
         return
 
+    import time
     import httpx
 
-    try:
-        response = httpx.post(webhook_url, json=payload, timeout=30.0)
-        response.raise_for_status()
-    except Exception as error:  # noqa: BLE001
-        print(f"[LipDub webhook] callback failed: {error}")
+    delays = [0, 5, 10, 20, 40, 60]
+
+    for attempt, delay in enumerate(delays, start=1):
+        if delay:
+            time.sleep(delay)
+
+        try:
+            response = httpx.post(
+                webhook_url,
+                json=payload,
+                timeout=45.0,
+                follow_redirects=True,
+            )
+
+            if response.is_success:
+                print(
+                    f"[LipDub webhook] Callback delivered on attempt "
+                    f"{attempt}: {response.status_code}"
+                )
+                return
+
+            print(
+                f"[LipDub webhook] Attempt {attempt} returned "
+                f"{response.status_code}: {response.text[:500]}"
+            )
+        except Exception as error:  # noqa: BLE001
+            print(
+                f"[LipDub webhook] Attempt {attempt} failed: "
+                f"{type(error).__name__}: {error}"
+            )
+
+    print("[LipDub webhook] Callback failed after all retry attempts")
 
 
 def _gemma_snapshot_error(root: Path) -> str | None:
