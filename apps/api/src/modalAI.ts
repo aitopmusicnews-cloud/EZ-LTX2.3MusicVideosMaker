@@ -86,7 +86,7 @@ export async function imageToVideo(req: ImageToVideoRequest, callbackBaseUrl: st
       method: "POST",
       headers: modalHeaders(),
       body: JSON.stringify({ prompt, duration, init_image_url: initImageUrl || undefined, job_id: jobId, webhook_url: webhookUrl }),
-      signal: AbortSignal.timeout(30_000),
+      signal: AbortSignal.timeout(120_000),
       redirect: "follow",
     });
   } catch (error) {

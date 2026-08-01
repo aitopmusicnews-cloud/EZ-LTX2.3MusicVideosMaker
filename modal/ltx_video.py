@@ -92,10 +92,8 @@ class LTXGenerator:
             conditions = None
             if init_image_url:
                 print(f"[LTX-2.3] Loading first-frame condition: {init_image_url}")
-                with httpx.Client(timeout=45.0, follow_redirects=True) as client:
-                    response = client.get(init_image_url)
-                    response.raise_for_status()
-                image = Image.open(io.BytesIO(response.content)).convert("RGB")
+                image_bytes = self._download_image_with_retries(init_image_url)
+                image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
                 conditions = [LTX2VideoCondition(frames=image, index=0, strength=1.0)]
 
             print(
@@ -147,6 +145,44 @@ class LTXGenerator:
                 {"status": "failed", "job_id": job_id, "error": message},
             )
             raise
+
+    @staticmethod
+    def _download_image_with_retries(image_url: str) -> bytes:
+        import time
+
+        import httpx
+
+        delays = (0, 2, 5)
+        last_error: Exception | None = None
+
+        for attempt, delay in enumerate(delays, start=1):
+            if delay:
+                time.sleep(delay)
+
+            try:
+                with httpx.Client(timeout=60.0, follow_redirects=True) as client:
+                    response = client.get(image_url)
+                    response.raise_for_status()
+
+                if not response.content:
+                    raise RuntimeError("Starting-image download returned an empty file.")
+
+                print(
+                    f"[LTX-2.3] Starting image downloaded "
+                    f"on attempt {attempt}/{len(delays)}."
+                )
+                return response.content
+            except Exception as error:
+                last_error = error
+                print(
+                    f"[LTX-2.3] Starting-image download attempt "
+                    f"{attempt}/{len(delays)} failed: {error}"
+                )
+
+        raise RuntimeError(
+            f"Could not download starting image after {len(delays)} attempts: "
+            f"{last_error}"
+        )
 
     @staticmethod
     def _encode_video_with_audio(
@@ -238,13 +274,40 @@ class LTXGenerator:
     def _send_webhook(webhook_url: str | None, payload: dict) -> None:
         if not webhook_url:
             return
+
+        import time
+
         import httpx
 
-        try:
-            response = httpx.post(webhook_url, json=payload, timeout=20.0)
-            response.raise_for_status()
-        except Exception as callback_error:
-            print(f"[Webhook] Callback failed: {callback_error}")
+        delays = (0, 5, 10, 20, 40, 60)
+        last_error: Exception | None = None
+
+        for attempt, delay in enumerate(delays, start=1):
+            if delay:
+                time.sleep(delay)
+
+            try:
+                with httpx.Client(timeout=45.0, follow_redirects=True) as client:
+                    response = client.post(webhook_url, json=payload)
+                    response.raise_for_status()
+
+                print(
+                    f"[Webhook] Callback delivered for "
+                    f"{payload.get('job_id') or 'untracked job'} "
+                    f"on attempt {attempt}/{len(delays)}."
+                )
+                return
+            except Exception as callback_error:
+                last_error = callback_error
+                print(
+                    f"[Webhook] Callback attempt {attempt}/{len(delays)} "
+                    f"failed: {callback_error}"
+                )
+
+        print(
+            f"[Webhook] Callback permanently failed after "
+            f"{len(delays)} attempts: {last_error}"
+        )
 
 
 @app.function(image=web_image, volumes={OUTPUT_DIR: output_volume})
