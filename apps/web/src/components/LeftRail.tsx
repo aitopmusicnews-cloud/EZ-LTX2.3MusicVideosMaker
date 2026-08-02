@@ -3,6 +3,7 @@ import { useStore } from "../lib/store.js";
 import { saveImageToLibrary } from "../lib/api.js";
 import { downloadFromUrl } from "../lib/download.js";
 import { AssetUploader } from "./AssetUploader.js";
+import { EasyWayPromptAssistant } from "./EasyWayPromptAssistant.js";
 
 const LOOKBOOK_MAX = 16;
 
@@ -47,6 +48,20 @@ export function LeftRail() {
         </div>
       </div>
 
+      <div className="section">
+        <button
+          type="button"
+          className="easy-way-rail-launcher"
+          onClick={() => window.dispatchEvent(new CustomEvent("mvs-open-easy-way"))}
+        >
+          <img src="/the-easy-way.png" alt="" />
+          <span>
+            <strong>The Easy Way</strong>
+            <small>Music-video setup, character, prompts, and plan</small>
+          </span>
+          <b>›</b>
+        </button>
+      </div>
       <div className="section">
         <div className="section-header">
           <span className="label">Reference images</span>
@@ -119,6 +134,7 @@ export function LeftRail() {
         </div>
       )}
 
+      <EasyWayPromptAssistant />
       {previewUrl && <ImageLightbox url={previewUrl} onClose={() => setPreviewUrl(null)} />}
     </aside>
   );

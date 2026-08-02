@@ -11,7 +11,6 @@ import {
 } from "../lib/api.js";
 import { AssetUploader } from "./AssetUploader.js";
 import { toast } from "../lib/toast.js";
-import { EasyWayPromptAssistant } from "./EasyWayPromptAssistant.js";
 import { ensureImageVideoPrompt, ensurePerformancePrompt } from "../lib/musicPromptEnhancer.js";
 
 type LtxSource = "textToVideo" | "imageToVideo" | "continue";
@@ -569,17 +568,6 @@ export function Sidebar() {
           </span>
         </div>
       )}
-
-      <EasyWayPromptAssistant
-        prompt={prompt}
-        onPromptChange={(value) =>
-          updateClip(clip.id, { prompt: value })
-        }
-        sectionLabel={sectionLabel}
-        energy={energy}
-        hasPreviousClip={hasPrev}
-        audioLoaded={Boolean(audioUrl)}
-      />
       <div className="option-group">
         <div className="label">{promptLabel}</div>
         <textarea
