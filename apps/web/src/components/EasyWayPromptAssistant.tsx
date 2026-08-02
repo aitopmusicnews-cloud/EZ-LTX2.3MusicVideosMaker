@@ -146,9 +146,26 @@ function averageEnergy(
 function sectionLabelFor(
   start: number,
   end: number,
-  sections: Array<{ start: number; end: number; label?: string }>,
+  sections: Array<{
+    [key: string]: unknown;
+    label?: string;
+    start?: number;
+    end?: number;
+  }>,
 ): string {
-  return sections.find((item) => item.start <= start && item.end >= end)?.label || "song section";
+  const section = sections.find((item) => {
+    const sectionStart = Number(item.start);
+    const sectionEnd = Number(item.end);
+
+    return (
+      Number.isFinite(sectionStart) &&
+      Number.isFinite(sectionEnd) &&
+      sectionStart <= start &&
+      sectionEnd >= end
+    );
+  });
+
+  return section?.label || "song section";
 }
 
 function primaryVisualStyle(values: string[]): VisualStyle {
