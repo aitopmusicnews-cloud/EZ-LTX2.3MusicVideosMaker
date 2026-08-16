@@ -13,14 +13,12 @@ const optionalNonEmpty = z
 const Env = z.object({
   LOCAL_INFERENCE_URL: optionalUrl.optional(),
   MODAL_AUDIO_URL: optionalUrl.optional(),
-  MODAL_LTX_URL: optionalUrl.optional(),
   MODAL_MEDIA_SUITE_URL: optionalUrl.optional(),
-  MODAL_LIPSYNC_URL: optionalUrl.optional(),
-  MODAL_PERFORMANCE_URL: optionalUrl.optional(),
   MODAL_FILE_RESOLVER_URL: optionalUrl.optional(),
   MODAL_KEY: optionalNonEmpty.optional(),
   MODAL_SECRET: optionalNonEmpty.optional(),
   GEMINI_API_KEY: optionalNonEmpty.optional(),
+  AGNES_API_KEY: optionalNonEmpty.optional(),
   GEMINI_DIRECTOR_MODEL: z.string().trim().min(1).default("gemini-3.6-flash"),
   API_AUTH_TOKEN: optionalNonEmpty.optional(),
   PORT: z.coerce.number().default(3001),
@@ -77,8 +75,8 @@ export const config = {
   STORAGE_BACKEND: storageBackend,
 };
 
-if (!config.MODAL_LTX_URL) {
-  console.log("INFO: MODAL_LTX_URL is missing. Video generation is offline.");
+if (!config.AGNES_API_KEY) {
+  console.log("INFO: AGNES_API_KEY is missing. Agnes video generation is offline.");
 }
 if (!config.MODAL_AUDIO_URL) {
   console.log("INFO: MODAL_AUDIO_URL is missing. Music analysis is offline.");
@@ -86,14 +84,8 @@ if (!config.MODAL_AUDIO_URL) {
 if (!config.MODAL_MEDIA_SUITE_URL) {
   console.log("INFO: MODAL_MEDIA_SUITE_URL is missing. Character creation is offline.");
 }
-if (!config.MODAL_LIPSYNC_URL) {
-  console.log("INFO: MODAL_LIPSYNC_URL is missing. Lip-sync is offline.");
-}
-if (!config.MODAL_PERFORMANCE_URL) {
-  console.log("INFO: MODAL_PERFORMANCE_URL is missing. Audio-driven performance generation is offline.");
-}
 if (!config.GEMINI_API_KEY) {
-  console.log("INFO: GEMINI_API_KEY is missing. The LTX Director Agent is offline and will not use a fallback planner.");
+  console.log("INFO: GEMINI_API_KEY is missing. The Director Agent is offline and will not use a fallback planner.");
 }
 
 export type Config = typeof config;

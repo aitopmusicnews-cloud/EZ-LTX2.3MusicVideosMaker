@@ -1,82 +1,93 @@
-# Deploy checklist
+# Deploy checklist — Agnes Video V2.0
 
-Use this order so Render does not call an undeployed Modal endpoint.
+## 1. Credentials and storage
 
-## 1. Rotate the old AWS keys
+Rotate any old cloud credentials before production use. For persistent project/media/render storage, configure private S3:
 
-The uploaded archive contained an environment export with AWS credentials. Delete or deactivate those keys in AWS IAM and create new ones before using S3 again. The environment export has been removed from this cleaned repository.
-
-## 2. Deploy LTX-2.3 on Modal
-
-From the repository folder:
-
-```bash
-python3.12 -m venv .venv
-source .venv/bin/activate
-pip install modal
-modal setup
-modal deploy modal/ltx_video.py
+```text
+STORAGE_BACKEND=s3
+S3_BUCKET=...
+S3_REGION=...
+AWS_ACCESS_KEY_ID=...
+AWS_SECRET_ACCESS_KEY=...
+# AWS_SESSION_TOKEN=... when applicable
 ```
 
-Copy the URL ending in `mvs-ltx-video-generate.modal.run`.
+S3 objects remain private. Agnes reference images are handed off with short-lived server-generated HTTPS presigned URLs.
 
-## 3. Update Render environment variables
+## 2. Configure Agnes
 
-In Render, open the `music-video-studio` service and set:
+Set the server-side key in Render:
+
+```text
+AGNES_API_KEY=...
+```
+
+Do not expose this key to the browser.
+
+## 3. Configure the app origin
 
 ```text
 PUBLIC_BASE_URL=https://YOUR-SERVICE.onrender.com
 WEB_ORIGIN=https://YOUR-SERVICE.onrender.com
-MODAL_LTX_URL=https://YOUR-WORKSPACE--mvs-ltx-video-generate.modal.run
 ```
 
-For temporary testing without S3:
+If production uses local storage instead of S3, `PUBLIC_BASE_URL` must be publicly reachable over HTTPS for Agnes Image → Video. Render local storage is ephemeral, so S3 is recommended for saved projects and generated media.
+
+## 4. Retained optional services
+
+Only configure the Modal services you still use:
 
 ```text
-STORAGE_BACKEND=local
+MODAL_AUDIO_URL=...          # retained audio analysis service
+MODAL_MEDIA_SUITE_URL=...    # retained character/reference image generation
+MODAL_KEY=...                # optional Modal proxy auth
+MODAL_SECRET=...
 ```
 
-For permanent storage, set `STORAGE_BACKEND=s3` and provide all of:
+Do **not** configure `MODAL_LTX_URL`, `MODAL_LIPSYNC_URL`, or `MODAL_PERFORMANCE_URL`; active video generation no longer depends on them.
+
+For the Director planner:
 
 ```text
-S3_BUCKET
-S3_REGION
-AWS_ACCESS_KEY_ID
-AWS_SECRET_ACCESS_KEY
+GEMINI_API_KEY=...
+GEMINI_DIRECTOR_MODEL=gemini-3.6-flash
 ```
 
-Do not set `API_AUTH_TOKEN` yet unless the browser is also updated to send it.
+## 5. Build and deploy
 
-## 4. Redeploy Render
-
-Push this repaired source to GitHub, then in Render choose **Manual Deploy → Clear build cache & deploy**.
-
-Expected commands from `render.yaml`:
+Expected Render commands:
 
 ```text
 Build: npm ci --include=dev --no-audit --no-fund && npm run build
 Start: npm start
+Health check: /health
 ```
 
-## 5. Verify
-
-Open:
+Verify:
 
 ```text
 https://YOUR-SERVICE.onrender.com/health
 ```
 
-It should return:
+Expected:
 
 ```json
 {"ok":true}
 ```
 
-Then select the first timeline segment and generate a 1–5 second **Text → Video** clip from the LTX-2.3 sidebar. Render logs should show a job launch and later a `POST /api/modal/webhook`. Modal logs should show the model loading and the completed MP4 URL.
+## 6. Production smoke test
 
-## Common failure messages
+Without forcing timeline lengths, test at least:
 
-- `MODAL_LTX_URL is not configured`: the Render variable is missing or points to the wrong endpoint.
-- `Could not reach the Modal LTX service`: Modal is not deployed, the URL is wrong, or proxy credentials do not match.
-- A task remains `RUNNING`: confirm `PUBLIC_BASE_URL` is the exact public Render URL and that Modal can post to `/api/modal/webhook`.
-- Render cannot start after S3 errors: use `STORAGE_BACKEND=local` temporarily or provide the complete S3 credential set.
+1. upload a song and wait for analysis;
+2. confirm timeline clips use analysis start/end boundaries;
+3. generate a short Text → Video clip with Agnes;
+4. generate an Image → Video clip with a private-S3 reference;
+5. generate a timeline clip longer than five seconds;
+6. confirm `pending`, `queued`, and `in_progress` remain non-terminal;
+7. confirm completed results resolve from HTTPS `metadata.url`;
+8. save/reload the project and verify the clip library;
+9. render Final Cut and confirm the original song is the AAC soundtrack and the output duration matches the timeline.
+
+No Modal callback/webhook is required for Agnes video generation; the browser polls the Fastify task endpoint and the server polls Agnes with a 10-second provider cadence and 360-second per-segment deadline.

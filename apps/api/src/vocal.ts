@@ -1,5 +1,5 @@
 import { config } from "./config.js";
-import { encodeTaskId, type ModalTask } from "./modalAI.js";
+import { encodeTaskId, type ModalTask } from "./generationJobs.js";
 
 interface ModalAudioResponse {
   duration: number;
