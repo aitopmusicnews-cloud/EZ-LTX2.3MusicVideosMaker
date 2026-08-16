@@ -6,11 +6,7 @@ export function getErrorMessage(err: unknown): string {
   return String(err);
 }
 
-export function modelSupportsBridge(model: string): boolean {
-  return model === "ltx-video" || model === "runway-gen3";
-}
-
-export type GenerationModel = "ltx-video" | "runway-gen3" | "wan2.1" | "hunyuan" | string;
+export type GenerationModel = "agnes-video-v2.0" | "runway-gen3" | "wan2.1" | "hunyuan" | string;
 export type TextToImageModel = "sdxl" | "flux" | "wan2.1" | "openrouter_image_ultra" | "openrouter_image_flash" | "local_wan21_image" | "gpt_image_2" | "gemini_image3_pro" | string;
 export type TextToImageRatio = "16:9" | "9:16" | "1:1" | "4:3" | string;
 
@@ -172,55 +168,18 @@ export const ImageToVideoRequest = z.object({
   imageUrl: z.string().optional(),
   promptImage: z.string().optional(),
   promptImageEnd: z.string().optional(),
-  duration: z.number().optional(),
+  duration: z.number().positive(),
   model: z.string().optional(),
   ratio: z.string().optional(),
   aspectRatio: z.string().optional(),
 }).passthrough();
 export type ImageToVideoRequest = z.infer<typeof ImageToVideoRequest>;
 
-export const VideoToVideoRequest = z.object({
-  prompt: z.string().optional(),
-  videoUrl: z.string().optional(),
-  videoUri: z.string().optional(),
-  model: z.string().optional(),
-}).passthrough();
-export type VideoToVideoRequest = z.infer<typeof VideoToVideoRequest>;
-
-export const PerformanceRequest = z.object({
-  imageUrl: z.string().min(1),
-  audioUrl: z.string().min(1),
-  audioStart: z.number().min(0).optional(),
-  audioEnd: z.number().positive().optional(),
-  duration: z.number().min(1).max(5).optional(),
-  prompt: z.string().optional(),
-  promptText: z.string().optional(),
-  aspectRatio: z.string().optional(),
-  imageStrength: z.number().min(0).max(1).optional(),
-  useTalkingHeadLora: z.boolean().optional(),
-  loraStrength: z.number().min(0).max(1.5).optional(),
-  seed: z.number().int().optional(),
-}).passthrough();
-export type PerformanceRequest = z.infer<typeof PerformanceRequest>;
-export const LipSyncRequest = z.object({
-  imageUrl: z.string().optional(),
-  audioUrl: z.string().optional(),
-  audioUri: z.string().optional(),
-  videoUrl: z.string().optional(),
-  avatarId: z.string().optional(),
-  model: z.string().optional(),
-  prompt: z.string().optional(),
-  promptText: z.string().optional(),
-  referenceStrength: z.number().min(0).max(1.5).optional(),
-  audioStart: z.number().min(0).optional(),
-  audioEnd: z.number().positive().optional(),
-}).passthrough();
-export type LipSyncRequest = z.infer<typeof LipSyncRequest>;
 
 export const TextToVideoRequest = z.object({
   prompt: z.string().optional(),
   promptText: z.string().optional(),
-  duration: z.number().optional(),
+  duration: z.number().positive(),
   model: z.string().optional(),
   aspectRatio: z.string().optional(),
 }).passthrough();

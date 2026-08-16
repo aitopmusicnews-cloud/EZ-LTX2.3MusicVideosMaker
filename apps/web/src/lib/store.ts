@@ -5,7 +5,6 @@ import { ProjectSnapshot } from "@mvs/shared";
 import type { Job } from "./scheduler.js";
 import { getWs } from "./wavesurfer-ref.js";
 
-export const MAX_CLIP_LEN = 5;
 export const MIN_CLIP_LEN = 0.5;
 
 export const ZOOM_MIN = 1;
@@ -48,57 +47,30 @@ function newClipId(): string {
   return `clip-${crypto.randomUUID().slice(0, 8)}`;
 }
 
-function normalizeLtxClips(clips: Clip[]): Clip[] {
-  return clips.map((clip, index) => {
-    if (clip.status === "ready" && clip.source === "upload") return clip;
-    let source: string;
-    if (clip.source === "imageToVideo" || clip.source === "archetype") source = "imageToVideo";
-    else if (clip.source === "continue" && index > 0) source = "continue";
-    else source = "textToVideo";
-    return { ...clip, source, model: "ltx-video" };
+function normalizeGenerationClips(clips: Clip[]): Clip[] {
+  return clips.map((clip) => {
+    // Preserve completed historical media exactly as saved; old LTX clips may
+    // still be opened and exported, but any future generation uses Agnes.
+    if (clip.status === "ready" && clip.videoUrl) return clip;
+    const source =
+      clip.source === "imageToVideo" || clip.source === "archetype" || Boolean(clip.seedImageUrl)
+        ? "imageToVideo"
+        : "textToVideo";
+    return { ...clip, source, model: "agnes-video-v2.0" };
   });
 }
 
-function subdivideSection(section: AudioSection, beats: number[]): Clip[] {
-  const len = section.end - section.start;
-  if (len <= MAX_CLIP_LEN) {
-    return [
-      {
-        id: newClipId(),
-        start: section.start,
-        end: section.end,
-        source: "continue",
-        status: "empty",
-      },
-    ];
-  }
-  const count = Math.ceil(len / MAX_CLIP_LEN);
-  const idealLen = len / count;
-  const clips: Clip[] = [];
-  let cursor = section.start;
-  for (let i = 0; i < count - 1; i++) {
-    const target = section.start + idealLen * (i + 1);
-    const lo = cursor + MIN_CLIP_LEN;
-    const hi = section.end - MIN_CLIP_LEN;
-    const candidates = beats.filter((b) => b >= lo && b <= hi);
-    const cut = candidates.length ? nearestBeat(target, candidates)! : Math.min(hi, Math.max(lo, target));
-    clips.push({
-      id: newClipId(),
-      start: cursor,
-      end: cut,
-      source: "continue",
-      status: "empty",
-    });
-    cursor = cut;
-  }
-  clips.push({
+function clipForSection(section: AudioSection): Clip[] {
+  if (section.end - section.start < MIN_CLIP_LEN) return [];
+  return [{
     id: newClipId(),
-    start: cursor,
+    start: section.start,
     end: section.end,
-    source: "continue",
+    source: "textToVideo",
     status: "empty",
-  });
-  return clips;
+    model: "agnes-video-v2.0",
+    sectionLabel: section.label,
+  }];
 }
 
 type State = {
@@ -159,7 +131,7 @@ type State = {
   mergeWithRight: (clipId: string) => { ok: true } | { ok: false; reason: string };
   splitPreviewTime: () => number | null;
   /** Move the boundary between clip[idx-1] and clip[idx] to `newTime`.
-   *  Clamps to MIN_CLIP_LEN around both sides and the MAX_CLIP_LEN cap. */
+   *  Clamps only to MIN_CLIP_LEN around both sides; analysis/timeline duration is authoritative. */
   moveBoundary: (rightClipId: string, newTime: number) => void;
 };
 
@@ -217,7 +189,7 @@ export const useStore = create<State>()(
           return;
         }
         const s = result.data;
-        const clips = normalizeLtxClips((s.clips ?? []).map((c) =>
+        const clips = normalizeGenerationClips((s.clips ?? []).map((c) =>
           c.status === "queued" || c.status === "generating"
             ? {
                 ...c,
@@ -251,8 +223,7 @@ export const useStore = create<State>()(
       },
 
       loadSong: (songId, audioUrl, analysis, filename) => {
-        const clips = analysis.sections.flatMap((s) => subdivideSection(s, analysis.beats));
-        if (clips[0]) clips[0] = { ...clips[0], source: "textToVideo", model: "ltx-video" };
+        const clips = analysis.sections.flatMap((section) => clipForSection(section));
         set({
           projectId: get().projectId ?? `proj-${crypto.randomUUID().slice(0, 8)}`,
           songId,
@@ -367,7 +338,7 @@ export const useStore = create<State>()(
           ...target,
           id: newClipId(),
           start: at,
-          source: wasReady ? "continue" : target.source,
+          source: wasReady ? (target.seedImageUrl ? "imageToVideo" : "textToVideo") : target.source,
           status: wasReady ? "empty" : target.status,
           videoUrl: wasReady ? undefined : target.videoUrl,
           thumbnailUrl: wasReady ? undefined : target.thumbnailUrl,
@@ -390,22 +361,16 @@ export const useStore = create<State>()(
 
           const minTime = left.start + MIN_CLIP_LEN;
           const maxTime = right.end - MIN_CLIP_LEN;
-          // Cap-aware bounds: neither side can grow past MAX_CLIP_LEN.
-          const lo = Math.max(minTime, right.end - MAX_CLIP_LEN);
-          const hi = Math.min(maxTime, left.start + MAX_CLIP_LEN);
+          const lo = minTime;
+          const hi = maxTime;
           if (lo >= hi) return s;
           const t = clamp(newTime, lo, hi);
 
-          // Non-lipSync clips: renderer + preview both stretch to the new
-          // slot duration. Keep the videoUrl, no work lost.
-          //
-          // LipSync clips: the avatar mouth is locked to a specific audio
-          // range, and the renderer respects that by NOT time-stretching
-          // them — it trims instead. So we can keep the videoUrl ONLY for
-          // the LEFT clip when its end is shrinking (the new slot is a
-          // strict prefix of the old one, so the existing lip-sync
-          // covers it). The RIGHT clip's start moves, so the lip-sync no
-          // longer aligns to the audio at frame 0; that has to regenerate.
+          // Ordinary source clips keep the editor's historical time-stretch behavior.
+          // Agnes clips are generated to cover their timeline slot and must never be
+          // stretched: shrinking a left clip is a safe hard trim, while growing it
+          // or moving a right clip's start requires regeneration. Historical lipSync
+          // media keeps the same hard-trim semantics for saved projects.
           const wipe = (c: Clip): Clip => ({
             ...c,
             status: "empty",
@@ -414,14 +379,16 @@ export const useStore = create<State>()(
             generationTaskId: undefined,
             lastError: undefined,
           });
+          const requiresHardTrim = (c: Clip) =>
+            c.source === "lipSync" || c.model === "agnes-video-v2.0";
           const trimLeft = (c: Clip, newEnd: number): Clip => {
             const updated = { ...c, end: newEnd };
-            if (c.status !== "ready" || c.source !== "lipSync") return updated;
+            if (c.status !== "ready" || !requiresHardTrim(c)) return updated;
             return newEnd < c.end ? updated : wipe(updated);
           };
           const trimRight = (c: Clip, newStart: number): Clip => {
             const updated = { ...c, start: newStart };
-            if (c.status !== "ready" || c.source !== "lipSync") return updated;
+            if (c.status !== "ready" || !requiresHardTrim(c)) return updated;
             return wipe(updated);
           };
 
@@ -440,9 +407,6 @@ export const useStore = create<State>()(
         if (idx >= clips.length - 1) return { ok: false, reason: "no neighbor to the right" };
         const left = clips[idx]!;
         const right = clips[idx + 1]!;
-        if (right.end - left.start > MAX_CLIP_LEN) {
-          return { ok: false, reason: `merged clip would exceed ${MAX_CLIP_LEN}s generation cap` };
-        }
         const merged: Clip = {
           ...left,
           end: right.end,
@@ -494,7 +458,7 @@ export const useStore = create<State>()(
           return current;
         }
         const ps = result.data;
-        const clips = normalizeLtxClips((ps.clips ?? []).map((c) =>
+        const clips = normalizeGenerationClips((ps.clips ?? []).map((c) =>
           c.status === "queued"
             ? {
                 ...c,

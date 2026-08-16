@@ -14,10 +14,10 @@ export function SidebarEmpty() {
 
   return (
     <>
-      <div className="empty-title">LTX-2.3 Timeline</div>
+      <div className="empty-title">Agnes Video Timeline</div>
       <div className="empty-hint">
         {analysis
-          ? "Select a timeline clip to generate with LTX-2.3."
+          ? "Select a timeline clip to generate with Agnes Video V2.0."
           : "Drop a song on the timeline to create generation segments."}
       </div>
 
@@ -56,8 +56,8 @@ export function SidebarEmpty() {
         <div className="context-card">
           <div className="row"><span>Text → Video</span><span>Ready</span></div>
           <div className="row"><span>Image → Video</span><span>Ready</span></div>
-          <div className="row"><span>Continue clip</span><span>Ready</span></div>
-          <div className="row"><span>Native audio</span><span>Always on</span></div>
+          <div className="row"><span>Variable duration</span><span>Timeline driven</span></div>
+          <div className="row"><span>Final audio</span><span>Original song</span></div>
         </div>
       </div>
 

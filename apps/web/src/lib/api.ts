@@ -1,9 +1,6 @@
 import type {
   AudioAnalysis,
   ImageToVideoRequest,
-  VideoToVideoRequest,
-  LipSyncRequest,
-  PerformanceRequest,
   TextToImageRequest,
   TextToVideoRequest,
   ProjectMeta,
@@ -137,28 +134,6 @@ export async function startImageToVideo(req: Record<string, any>): Promise<{ id:
   }));
 }
 
-export async function startVideoToVideo(req: Record<string, any>): Promise<{ id: string }> {
-  return jsonOrThrow(await fetch("/api/generate/video-to-video", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(req),
-  }));
-}
-
-export async function startPerformance(req: PerformanceRequest): Promise<{ id: string }> {
-  return jsonOrThrow(await fetch("/api/generate/performance", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(req),
-  }));
-}
-export async function startLipSync(req: Record<string, any>): Promise<{ id: string }> {
-  return jsonOrThrow(await fetch("/api/generate/lip-sync", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(req),
-  }));
-}
 
 export async function startTextToImage(req: Record<string, any>): Promise<{ id: string }> {
   return jsonOrThrow(await fetch("/api/generate/text-to-image", {

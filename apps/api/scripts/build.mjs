@@ -74,11 +74,6 @@ const detailedErrorParser = `let message = text;
 if (directorDist.includes(oldErrorParser)) directorDist = directorDist.replace(oldErrorParser, detailedErrorParser);
 
 directorDist = directorDist.replace(/AbortSignal\.timeout\(180_000\)/g, "AbortSignal.timeout(600_000)");
-directorDist = directorDist.replace(
-  "The plan must be practical for independent 1-to-5-second LTX clips that are later edited together.",
-  "The timeline clips are analyzer-defined musical sections and may be longer than five seconds. Preserve every supplied start/end boundary exactly; the application internally splits long sections into provider-sized generations and stitches them back into one approval unit."
-);
-
 if (directorDist.includes("temperature: 0.35")) throw new Error("Gemini Director build still contains deprecated temperature configuration.");
 for (const forbidden of ["responseFormat:", "responseMimeType:", "responseJsonSchema:", "responseSchema:"]) {
   if (directorDist.includes(forbidden)) throw new Error(`Gemini Director build still contains unsupported structured-output configuration: ${forbidden}`);
@@ -86,7 +81,6 @@ for (const forbidden of ["responseFormat:", "responseMimeType:", "responseJsonSc
 if (!directorDist.includes("Match this JSON Schema exactly")) throw new Error("Gemini Director build is missing the schema-in-prompt contract.");
 if (directorDist.includes("AbortSignal.timeout(180_000)")) throw new Error("Gemini Director build still contains the old three-minute timeout.");
 if (!directorDist.includes("AbortSignal.timeout(600_000)")) throw new Error("Gemini Director build is missing the ten-minute planning timeout.");
-if (directorDist.includes("1-to-5-second LTX clips")) throw new Error("Gemini Director prompt still assumes five-second timeline clips.");
 await writeFile(directorDistPath, directorDist, "utf8");
 
 // Register routes whose implementation files are compiled by tsc but are kept
@@ -104,7 +98,7 @@ if (!serverDist.includes('/api/director/chat')) {
     }
     catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        req.log.error({ err: error }, "LTX Director chat failed");
+        req.log.error({ err: error }, "Director chat failed");
         return reply.code(message.includes("GEMINI_API_KEY") ? 503 : message.includes("invalid") || message.includes("unknown") ? 400 : 500).send({ error: message });
     }
 });
@@ -126,4 +120,4 @@ if (!serverDist.includes('/api/videos/stitch')) throw new Error("Compiled API is
 if (!serverDist.includes('/api/social/export')) throw new Error("Compiled API is missing /api/social/export.");
 await writeFile(serverDistPath, serverDist, "utf8");
 
-console.log("[api build] Compiled Director planning/chat, analyzer-length sections, long-section stitching, social exports, and ten-minute planning timeout.");
+console.log("[api build] Compiled Director planning/chat, analyzer-length sections, long-section stitching, social exports, and ten-minute planning timeout for Agnes production.");

@@ -121,6 +121,12 @@ export function PromoRangeSelector() {
   }, [songId, duration]);
 
   useEffect(() => {
+    const openPromo = () => setOpen(true);
+    window.addEventListener("mvs-open-promo-cut", openPromo);
+    return () => window.removeEventListener("mvs-open-promo-cut", openPromo);
+  }, []);
+
+  useEffect(() => {
     if (!previewing || !analysis) return;
     if (!isPlaying || playhead < end - 0.03) return;
     const ws = getWs();
@@ -227,10 +233,6 @@ export function PromoRangeSelector() {
 
   return (
     <>
-      <button type="button" style={launcherStyle} onClick={() => setOpen(true)}>
-        ✂ {promoMeta ? "Promo active" : "Promo Cut"}
-      </button>
-
       {open && (
         <div style={overlayStyle} onClick={(event) => { if (event.target === event.currentTarget && !progress) setOpen(false); }}>
           <section style={panelStyle} aria-label="Select promo song range">

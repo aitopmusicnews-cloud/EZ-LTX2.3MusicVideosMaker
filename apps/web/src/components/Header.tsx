@@ -98,6 +98,7 @@ export function Header() {
         end: c.end,
         videoUrl: c.videoUrl as string,
         source: c.source,
+        model: c.model,
       }));
     if (!ready.length) {
       toast.warning("No clips ready to render yet");

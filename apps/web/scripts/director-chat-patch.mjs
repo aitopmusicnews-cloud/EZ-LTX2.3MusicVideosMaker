@@ -25,15 +25,14 @@ export function patchDirectorChat(source, replaceRequired) {
     if (!session.shotApprovals[clipId]?.approved) { setError(\`Approve the shot image for \${shot.sectionLabel} before generating video.\`); return; }
     const conditioningUrl = resolveReferenceUrl(shot.conditioningReferenceId) || undefined;
     if (shot.requiresCharacter && !conditioningUrl) { setError(\`\${shot.sectionLabel} needs a character asset before video generation.\`); return; }
-    const previousReady = clipIndex > 0 && timelineClips[clipIndex - 1]?.status === "ready" && Boolean(timelineClips[clipIndex - 1]?.videoUrl);
-    const source = conditioningUrl ? "imageToVideo" : previousReady ? "continue" : "textToVideo";
+    const source = conditioningUrl ? "imageToVideo" : "textToVideo";
     updateClip(clip.id, {
       prompt: shot.prompt,
       sectionLabel: shot.sectionLabel,
       seedImageUrl: conditioningUrl,
       archetypeUrl: conditioningUrl,
       source,
-      model: "ltx-video",
+      model: "agnes-video-v2.0",
       lastError: undefined,
     });
     (enqueueGeneration as any)({
@@ -45,7 +44,7 @@ export function patchDirectorChat(source, replaceRequired) {
       duration: clip.end - clip.start,
       sectionLabel: shot.sectionLabel,
       energy: 0.65,
-      model: "ltx-video",
+      model: "agnes-video-v2.0",
     });
     toast.success(\`Generating only \${shot.sectionLabel}. Review and approve it before moving on.\`);
   };
@@ -74,7 +73,7 @@ export function patchDirectorChat(source, replaceRequired) {
           seedImageUrl: conditioningUrl || undefined,
           archetypeUrl: conditioningUrl || undefined,
           source: conditioningUrl ? "imageToVideo" : "textToVideo",
-          model: "ltx-video",
+          model: "agnes-video-v2.0",
         });
 
         if (action.regenerate) {

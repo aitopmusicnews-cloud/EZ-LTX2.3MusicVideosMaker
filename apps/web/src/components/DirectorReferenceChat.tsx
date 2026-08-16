@@ -27,6 +27,7 @@ type DirectorReferenceDetail = {
   name?: string;
   url?: string;
   sourceUrl?: string;
+  anchorUrl?: string;
   note?: string;
 };
 
@@ -117,6 +118,42 @@ export function DirectorReferenceChat() {
     if (!songId) return;
     localStorage.setItem(storageKey(songId), JSON.stringify(items));
   }, [items, songId]);
+
+  useEffect(() => {
+    const receiveSavedAsset = (event: Event) => {
+      const detail = (event as CustomEvent<DirectorReferenceDetail>).detail;
+      if (!detail || !detail.url) return;
+      const anchorUrl = detail.anchorUrl ?? detail.url;
+      const sourceUrl = detail.sourceUrl ?? detail.url;
+      const item: ReferenceItem = {
+        id: `asset-${crypto.randomUUID().slice(0, 8)}`,
+        kind: detail.kind === "note" ? "shot" : detail.kind,
+        media: detail.media,
+        name: detail.name || "Director asset",
+        url: sourceUrl,
+        anchorUrl,
+        note: detail.note,
+        status: detail.media === "note" ? undefined : "ready",
+        progress: detail.media === "note" ? undefined : 100,
+        createdAt: Date.now(),
+      };
+      setItems((current) => {
+        if (current.some((entry) => (entry.anchorUrl ?? entry.url) === anchorUrl)) return current;
+        const next = [...current, item];
+        if (songId) localStorage.setItem(storageKey(songId), JSON.stringify(next));
+        return next;
+      });
+      dispatchReference({ kind: item.kind, media: item.media, name: item.name, url: anchorUrl, sourceUrl, note: item.note });
+    };
+    window.addEventListener("mvs-director-save-asset", receiveSavedAsset as EventListener);
+    return () => window.removeEventListener("mvs-director-save-asset", receiveSavedAsset as EventListener);
+  }, [songId]);
+
+  useEffect(() => {
+    const openFromDirector = () => setOpen(true);
+    window.addEventListener("mvs-open-reference-chat", openFromDirector);
+    return () => window.removeEventListener("mvs-open-reference-chat", openFromDirector);
+  }, []);
 
   if (!songId) return null;
 
@@ -274,15 +311,7 @@ export function DirectorReferenceChat() {
     setItems((current) => current.filter((item) => item.id !== id));
   };
 
-  if (!open) {
-    return (
-      <button type="button" style={launcherStyle} onClick={() => setOpen(true)}>
-        ＋ References
-        {uploading && <span style={activityDotStyle} aria-label="Reference processing active" />}
-        {items.length > 0 && <span style={countStyle}>{items.length}</span>}
-      </button>
-    );
-  }
+  if (!open) return null;
 
   return (
     <aside style={panelStyle} aria-label="Director reference chat">
