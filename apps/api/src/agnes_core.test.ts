@@ -5,6 +5,7 @@ import {
   AGNES_IMAGE_MODEL,
   AGNES_REFERENCE_VIDEO_MODEL,
   AGNES_STANDARD_VIDEO_MODEL,
+  completedAgnesUrl,
   frameCountForDuration,
   parseAgnesCreateIds,
   preferredAgnesResultUrl,
@@ -39,4 +40,16 @@ test("Agnes task identifiers and model-aware status URL are preserved", () => {
   const url = new URL(preferredAgnesResultUrl("video id/1", AGNES_REFERENCE_VIDEO_MODEL));
   assert.equal(url.searchParams.get("video_id"), "video id/1");
   assert.equal(url.searchParams.get("model_name"), AGNES_REFERENCE_VIDEO_MODEL);
+});
+
+test("completed Agnes video URL accepts current and legacy response shapes", () => {
+  assert.equal(
+    completedAgnesUrl({ status: "completed", url: "https://cdn.example.com/current.mp4" }),
+    "https://cdn.example.com/current.mp4",
+  );
+  assert.equal(
+    completedAgnesUrl({ status: "completed", metadata: { url: "https://cdn.example.com/legacy.mp4" } }),
+    "https://cdn.example.com/legacy.mp4",
+  );
+  assert.equal(completedAgnesUrl({ status: "completed", url: "http://cdn.example.com/insecure.mp4" }), null);
 });
