@@ -1,5 +1,7 @@
 import { z } from "zod";
 import { config } from "./config.js";
+import { runGeminiDirectorWithFallback } from "./gemini_director_retry.js";
+import { buildLocalDirectorChatResponse } from "./director_chat_local.js";
 
 const UpdateClipActionSchema = z.object({
   type: z.literal("update_clip"),
@@ -60,6 +62,15 @@ const DirectorChatResponseSchema = z.object({
   actions: z.array(DirectorEditActionSchema).max(12).default([]),
 });
 
+type DirectorChatContext = {
+  userMessage: string;
+  recentConversation: unknown;
+  currentPlan: unknown;
+  availableReferences: unknown;
+  currentSceneImages: unknown;
+  currentShotImages: unknown;
+};
+
 function extractGeminiText(payload: unknown): string {
   const candidates = (payload as any)?.candidates;
   if (!Array.isArray(candidates) || !candidates.length) return "";
@@ -94,27 +105,13 @@ function systemInstruction(): string {
   ].join(" ");
 }
 
-export async function chatWithDirector(rawRequest: unknown): Promise<z.infer<typeof DirectorChatResponseSchema>> {
-  if (!config.GEMINI_API_KEY) throw new Error("GEMINI_API_KEY is not configured in Render.");
-  const req = DirectorChatRequestSchema.parse(rawRequest);
-  const validClipIds = new Set(req.plan.shots.map((shot) => shot.clipId));
-  const validReferenceIds = new Set(req.references.map((reference) => reference.id));
-
-  const context = {
-    userMessage: req.message,
-    recentConversation: req.history,
-    currentPlan: req.plan,
-    availableReferences: req.references,
-    currentSceneImages: req.sceneImages,
-    currentShotImages: req.shotImages,
-  };
-
-  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(config.GEMINI_DIRECTOR_MODEL)}:generateContent`;
+async function callGeminiChat(context: DirectorChatContext, model: string): Promise<unknown> {
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
   const response = await fetch(endpoint, {
     method: "POST",
     headers: {
       "content-type": "application/json",
-      "x-goog-api-key": config.GEMINI_API_KEY,
+      "x-goog-api-key": config.GEMINI_API_KEY!,
     },
     body: JSON.stringify({
       systemInstruction: { parts: [{ text: systemInstruction() }] },
@@ -138,19 +135,53 @@ export async function chatWithDirector(rawRequest: unknown): Promise<z.infer<typ
     } catch {
       // Keep raw response text.
     }
-    throw new Error(`Gemini Director chat failed: ${message.slice(0, 1200)}`);
+    const error = new Error(`Gemini Director chat failed (${response.status}): ${message.slice(0, 1200)}`) as Error & { status: number };
+    error.status = response.status;
+    throw error;
   }
 
-  const modelText = extractGeminiText(JSON.parse(responseText));
-  if (!modelText) throw new Error("Gemini Director chat returned no response.");
-  const parsed = DirectorChatResponseSchema.parse(parseJsonObject(modelText));
+  return JSON.parse(responseText);
+}
 
-  for (const action of parsed.actions) {
-    if (!validClipIds.has(action.clipId)) throw new Error(`Director chat referenced unknown clipId ${action.clipId}.`);
-    if (action.type === "update_clip" && action.conditioningReferenceId && !validReferenceIds.has(action.conditioningReferenceId)) {
-      throw new Error(`Director chat referenced unknown conditioning asset ${action.conditioningReferenceId}.`);
+export async function chatWithDirector(rawRequest: unknown): Promise<z.infer<typeof DirectorChatResponseSchema>> {
+  const req = DirectorChatRequestSchema.parse(rawRequest);
+  const validClipIds = new Set(req.plan.shots.map((shot) => shot.clipId));
+  const validReferenceIds = new Set(req.references.map((reference) => reference.id));
+
+  const localFallback = () => DirectorChatResponseSchema.parse(buildLocalDirectorChatResponse({
+    message: req.message,
+    plan: { shots: req.plan.shots },
+  }));
+
+  if (!config.GEMINI_API_KEY) return localFallback();
+
+  const context: DirectorChatContext = {
+    userMessage: req.message,
+    recentConversation: req.history,
+    currentPlan: req.plan,
+    availableReferences: req.references,
+    currentSceneImages: req.sceneImages,
+    currentShotImages: req.shotImages,
+  };
+
+  try {
+    const resilient = await runGeminiDirectorWithFallback(
+      config.GEMINI_DIRECTOR_MODEL,
+      (model) => callGeminiChat(context, model),
+    );
+    const modelText = extractGeminiText(resilient.value);
+    if (!modelText) throw new Error("Gemini Director chat returned no response.");
+    const parsed = DirectorChatResponseSchema.parse(parseJsonObject(modelText));
+
+    for (const action of parsed.actions) {
+      if (!validClipIds.has(action.clipId)) throw new Error(`Director chat referenced unknown clipId ${action.clipId}.`);
+      if (action.type === "update_clip" && action.conditioningReferenceId && !validReferenceIds.has(action.conditioningReferenceId)) {
+        throw new Error(`Director chat referenced unknown conditioning asset ${action.conditioningReferenceId}.`);
+      }
     }
-  }
 
-  return parsed;
+    return parsed;
+  } catch {
+    return localFallback();
+  }
 }
