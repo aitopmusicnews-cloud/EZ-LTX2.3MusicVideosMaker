@@ -49,7 +49,6 @@ export function patchDirectorAssetEditing(source, replaceRequired) {
     const referenceUrls = buildApprovalReferenceImages(existingUrl, selectedCharacterUrls).map((reference) => reference.uri);
     if (targetType === "scene_image") await generateSceneVisual(clipId, pending.prompt, referenceUrls);
     else await generateShotVisual(clipId, pending.prompt, referenceUrls);
-    clearPendingAssetEdit(targetType, clipId);
   };
 
   const applyDirectorChatActions = async (actions: DirectorEditAction[]) => {
@@ -86,6 +85,14 @@ export function patchDirectorAssetEditing(source, replaceRequired) {
 `;
   patched = patched.slice(0, handlerStart) + preparedHandler + patched.slice(handlerEnd);
 
+  const sceneSuccess = 'try { const url = await generateApprovalImage(prompt, referenceUrls); setSceneApproval(key, { url, approved: false }); toast.success("Scene image generated for approval"); }';
+  const sceneSuccessWithPendingClear = 'try { const url = await generateApprovalImage(prompt, referenceUrls); setSceneApproval(key, { url, approved: false }); clearPendingAssetEdit("scene_image", key); toast.success("Scene image generated for approval"); }';
+  if (!patched.includes('clearPendingAssetEdit("scene_image", key)')) patched = replaceRequired(patched, sceneSuccess, sceneSuccessWithPendingClear, "clear successful scene pending edit");
+
+  const shotSuccess = 'try { const url = await generateApprovalImage(prompt, referenceUrls); setShotApproval(key, { url, approved: false }); toast.success("Shot image generated for approval"); }';
+  const shotSuccessWithPendingClear = 'try { const url = await generateApprovalImage(prompt, referenceUrls); setShotApproval(key, { url, approved: false }); clearPendingAssetEdit("shot_image", key); toast.success("Shot image generated for approval"); }';
+  if (!patched.includes('clearPendingAssetEdit("shot_image", key)')) patched = replaceRequired(patched, shotSuccess, shotSuccessWithPendingClear, "clear successful shot pending edit");
+
   const sectionToast = '    toast.success(`Generating only ${shot.sectionLabel}. Review and approve it before moving on.`);';
   const sectionToastWithClear = '    clearPendingAssetEdit("clip", clipId);\n    toast.success(`Generating only ${shot.sectionLabel}. Review and approve it before moving on.`);';
   if (!patched.includes('clearPendingAssetEdit("clip", clipId)')) patched = replaceRequired(patched, sectionToast, sectionToastWithClear, "explicit section regeneration pending-edit clear");
@@ -107,10 +114,11 @@ export function patchDirectorAssetEditing(source, replaceRequired) {
   if (!patched.includes('target={{ type: "shot_image", clipId: shot.clipId }}')) patched = replaceRequired(patched, shotApprovalEnd, shotInline, "inline shot edit chat");
 
   const sharedImageMaps = `sceneImages={Object.fromEntries(Object.entries(session.sceneApprovals).filter(([, value]) => Boolean(value?.url)).map(([key, value]) => [key, value.url]))} shotImages={Object.fromEntries(Object.entries(session.shotApprovals).filter(([, value]) => Boolean(value?.url)).map(([key, value]) => [key, value.url]))}`;
-  const assetsPanel = `<DirectorAssetsPanel plan={session.plan} references={readyReferences} ${sharedImageMaps} characters={characterOptions} approvedCharacterIds={session.approvedCharacterIds} characterSelections={session.characterSelections} pendingAssetEdits={session.pendingAssetEdits} disabled={!!busy} onApply={applyDirectorChatActions} onCharacterSelectionChange={updateCharacterSelection} onGeneratePreparedImage={generatePreparedImage} />`;
+  const resolvedCharacterSelections = `Object.fromEntries(session.plan.shots.map((shot) => [shot.clipId, selectionForClip(session.characterSelections, shot.clipId, shot.conditioningReferenceId).filter((id) => session.approvedCharacterIds.includes(id))]))`;
+  const assetsPanel = `<DirectorAssetsPanel plan={session.plan} references={readyReferences} ${sharedImageMaps} characters={characterOptions} approvedCharacterIds={session.approvedCharacterIds} characterSelections={${resolvedCharacterSelections}} pendingAssetEdits={session.pendingAssetEdits} disabled={!!busy} onApply={applyDirectorChatActions} onCharacterSelectionChange={updateCharacterSelection} onGeneratePreparedImage={generatePreparedImage} />`;
   patched = replaceTag(patched, "DirectorAssetsPanel", assetsPanel);
 
-  const sectionReview = `<DirectorSectionReview songId={songId} plan={session.plan} references={readyReferences} ${sharedImageMaps} characters={characterOptions} approvedCharacterIds={session.approvedCharacterIds} characterSelections={session.characterSelections} pendingAssetEdits={session.pendingAssetEdits} disabled={!!busy} onGenerate={generateSectionPreview} onApply={applyDirectorChatActions} onCharacterSelectionChange={updateCharacterSelection} />`;
+  const sectionReview = `<DirectorSectionReview songId={songId} plan={session.plan} references={readyReferences} ${sharedImageMaps} characters={characterOptions} approvedCharacterIds={session.approvedCharacterIds} characterSelections={${resolvedCharacterSelections}} pendingAssetEdits={session.pendingAssetEdits} disabled={!!busy} onGenerate={generateSectionPreview} onApply={applyDirectorChatActions} onCharacterSelectionChange={updateCharacterSelection} />`;
   patched = replaceTag(patched, "DirectorSectionReview", sectionReview);
 
   if (/if \(action\.regenerate\)[\s\S]{0,800}generateSectionPreview\(action\.clipId\)/.test(patched)) throw new Error("Director chat still auto-regenerates video.");
