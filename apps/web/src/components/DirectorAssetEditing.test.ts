@@ -57,3 +57,15 @@ test("prepared image edits and clip regeneration require explicit UI actions", (
   assert.match(sectionSource, /prepared|regeneration/i);
   assert.match(sectionSource, /onGenerate\(shot\.clipId\)/);
 });
+
+test("a failed prepared image generation keeps its pending edit available for retry", () => {
+  assert.doesNotMatch(patchedAgent, /await generateSceneVisual\(clipId, pending\.prompt, referenceUrls\);[\s\S]{0,160}clearPendingAssetEdit\(targetType, clipId\)/);
+  assert.doesNotMatch(patchedAgent, /await generateShotVisual\(clipId, pending\.prompt, referenceUrls\);[\s\S]{0,160}clearPendingAssetEdit\(targetType, clipId\)/);
+  assert.match(patchedAgent, /setSceneApproval\(key, \{ url, approved: false \}\);\s*clearPendingAssetEdit\("scene_image", key\)/);
+  assert.match(patchedAgent, /setShotApproval\(key, \{ url, approved: false \}\);\s*clearPendingAssetEdit\("shot_image", key\)/);
+});
+
+test("secondary asset pickers receive legacy conditioning IDs through selectionForClip", () => {
+  assert.match(patchedAgent, /DirectorAssetsPanel[\s\S]{0,2600}characterSelections=\{Object\.fromEntries\(session\.plan\.shots\.map\(\(shot\) => \[shot\.clipId, selectionForClip/);
+  assert.match(patchedAgent, /DirectorSectionReview[\s\S]{0,2600}characterSelections=\{Object\.fromEntries\(session\.plan\.shots\.map\(\(shot\) => \[shot\.clipId, selectionForClip/);
+});
