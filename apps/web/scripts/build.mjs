@@ -48,6 +48,7 @@ const originalApi = await readFile(apiPath, "utf8");
 const originalScheduler = await readFile(schedulerPath, "utf8");
 const originalStore = await readFile(storePath, "utf8");
 const needsNormalization = originalSidebar.includes(inferredDeclaration);
+const visionFirstDirector = originalDirector.includes("const DIRECTOR_VERSION = 3;");
 
 if (!needsNormalization && !originalSidebar.includes(numericDeclaration)) {
   throw new Error("Could not find the LipDub progress percentage declaration in Sidebar.tsx");
@@ -60,9 +61,13 @@ let patchedDirector = originalDirector;
 if (!patchedDirector.includes('window.addEventListener("mvs-director-reference"')) {
   patchedDirector = replaceRequired(patchedDirector, directorEffectAnchor, referenceListener, "Director reference chat listener");
 }
-patchedDirector = patchDirectorStatus(patchedDirector, replaceRequired);
-patchedDirector = patchDirectorEditing(patchedDirector, replaceRequired);
-patchedDirector = patchSocialExport(patchedDirector, replaceRequired);
+if (!visionFirstDirector) {
+  patchedDirector = patchDirectorStatus(patchedDirector, replaceRequired);
+  patchedDirector = patchDirectorEditing(patchedDirector, replaceRequired);
+  patchedDirector = patchSocialExport(patchedDirector, replaceRequired);
+} else {
+  console.log("[web build] Director v3 owns its production controls; skipped legacy v2 source patches.");
+}
 
 const oldApiErrorMessage = `    const msg = parsed?.error ?? text;\n    throw new ApiError(res.status, msg, parsed?.rateLimited === true);`;
 const safeApiErrorMessage = `    const isHtml = /<!doctype|<html/i.test(text.slice(0, 300));\n    const msg = parsed?.error ?? (isHtml\n      ? (res.status >= 500 ? "The Render service is temporarily unavailable. Please try again." : "The server returned an HTML error page instead of JSON.")\n      : text.slice(0, 500));\n    throw new ApiError(res.status, msg, parsed?.rateLimited === true);`;
@@ -95,7 +100,7 @@ try {
   }
   await writeFile(directorPath, patchedDirector, "utf8");
   console.log("[web build] Kept Director source build-compatible for saved sessions.");
-  console.log("[web build] Added social media export presets to the final-cut screen.");
+  if (!visionFirstDirector) console.log("[web build] Added social media export presets to the final-cut screen.");
   await writeFile(apiPath, patchedApi, "utf8");
   await writeFile(schedulerPath, patchedScheduler, "utf8");
   await writeFile(storePath, patchedStore, "utf8");
