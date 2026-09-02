@@ -73,6 +73,35 @@ const detailedErrorParser = `let message = text;
         }`;
 if (directorDist.includes(oldErrorParser)) directorDist = directorDist.replace(oldErrorParser, detailedErrorParser);
 
+// The Director source is compiled first, then this build step applies the
+// production request contract. Wire transient Gemini capacity handling here so
+// the deployed artifact retries 429/503/high-demand/network timeouts and can
+// fall back to the stable Gemini 2.5 Flash model without changing user plans.
+const resilienceImport = `import { runGeminiDirectorWithFallback } from "./gemini_director_retry.js";`;
+if (!directorDist.includes(resilienceImport)) directorDist = `${resilienceImport}\n${directorDist}`;
+
+const legacyGeminiError = 'throw new Error(`Gemini Director failed: ${message.slice(0, 800)}`);';
+const statusAwareGeminiError = 'throw new Error(`Gemini Director failed (${response.status}): ${message.slice(0, 800)}`);';
+if (directorDist.includes(legacyGeminiError)) directorDist = directorDist.replace(legacyGeminiError, statusAwareGeminiError);
+else if (!directorDist.includes("Gemini Director failed (${response.status})")) throw new Error("Could not make Gemini Director HTTP errors status-aware.");
+
+const modelDeclaration = `const model = config.GEMINI_DIRECTOR_MODEL;`;
+const resilientModelDeclaration = `${modelDeclaration}\n    let successfulModel = model;`;
+if (!directorDist.includes("let successfulModel = model;")) {
+  if (!directorDist.includes(modelDeclaration)) throw new Error("Could not find Gemini Director model declaration.");
+  directorDist = directorDist.replace(modelDeclaration, resilientModelDeclaration);
+}
+
+const directGeminiCall = `const response = await callGemini(attemptParts, model);`;
+const resilientGeminiCall = `const resilientGemini = await runGeminiDirectorWithFallback(model, (candidateModel) => callGemini(attemptParts, candidateModel));\n        const response = resilientGemini.value;\n        successfulModel = resilientGemini.model;`;
+if (!directorDist.includes("runGeminiDirectorWithFallback(model")) {
+  if (!directorDist.includes(directGeminiCall)) throw new Error("Could not find direct Gemini Director call.");
+  directorDist = directorDist.replace(directGeminiCall, resilientGeminiCall);
+}
+
+if (directorDist.includes("agentModel: model,")) directorDist = directorDist.replace("agentModel: model,", "agentModel: successfulModel,");
+if (!directorDist.includes("agentModel: successfulModel,")) throw new Error("Gemini Director plan does not report the model that actually succeeded.");
+
 directorDist = directorDist.replace(/AbortSignal\.timeout\(180_000\)/g, "AbortSignal.timeout(600_000)");
 directorDist = directorDist.replace(
   "The plan must be practical for independent 1-to-5-second Agnes clips that are later edited together.",
@@ -87,6 +116,7 @@ if (!directorDist.includes("Match this JSON Schema exactly")) throw new Error("G
 if (directorDist.includes("AbortSignal.timeout(180_000)")) throw new Error("Gemini Director build still contains the old three-minute timeout.");
 if (!directorDist.includes("AbortSignal.timeout(600_000)")) throw new Error("Gemini Director build is missing the ten-minute planning timeout.");
 if (directorDist.includes("1-to-5-second Agnes clips")) throw new Error("Gemini Director prompt still assumes five-second timeline clips.");
+if (!directorDist.includes("runGeminiDirectorWithFallback(model")) throw new Error("Gemini Director build is missing transient-capacity retry/fallback handling.");
 await writeFile(directorDistPath, directorDist, "utf8");
 
 // Register routes whose implementation files are compiled by tsc but are kept
@@ -126,4 +156,4 @@ if (!serverDist.includes('/api/videos/stitch')) throw new Error("Compiled API is
 if (!serverDist.includes('/api/social/export')) throw new Error("Compiled API is missing /api/social/export.");
 await writeFile(serverDistPath, serverDist, "utf8");
 
-console.log("[api build] Compiled Director planning/chat, analyzer-length sections, long-section stitching, social exports, and ten-minute planning timeout.");
+console.log("[api build] Compiled Director planning/chat with Gemini capacity retries/fallback, analyzer-length sections, long-section stitching, social exports, and ten-minute planning timeout.");
