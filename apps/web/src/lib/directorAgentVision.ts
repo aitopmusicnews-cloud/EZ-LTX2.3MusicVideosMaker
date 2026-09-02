@@ -110,6 +110,7 @@ export function buildVisionTimelineClips(
         userDirection: shot.rawText || shot.visualDirection,
       }));
 
+  if (parsed.mode === "structured" && requestedClipCount === undefined) return baseClips;
   return rebalancePlanningClips(baseClips, requestedClipCount);
 }
 
