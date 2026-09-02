@@ -20,8 +20,15 @@ type LocalDirectorReference = {
   anchorUrl?: string;
 };
 
+const AUTHORITATIVE_SHOT_LIST_MARKER = "AUTHORITATIVE TIMECODED SHOT LIST";
+
 function compact(text: string): string {
   return text.replace(/\s+/g, " ").trim();
+}
+
+function userMustInclude(text: string): string {
+  const markerIndex = text.indexOf(AUTHORITATIVE_SHOT_LIST_MARKER);
+  return compact(markerIndex >= 0 ? text.slice(0, markerIndex) : text).replace(/[—–-]+\s*$/, "").trim();
 }
 
 function truncateWords(text: string, maxWords = 170): string {
@@ -44,7 +51,7 @@ export function buildLocalDirectorPlan(
 ) {
   const characterReference = references.find((reference) => reference.kind === "character" && reference.anchorUrl);
   const useCharacter = Boolean(req.characterRequired && characterReference);
-  const mustInclude = compact(req.mustInclude ?? "");
+  const mustInclude = userMustInclude(req.mustInclude ?? "");
   const avoid = compact(req.avoid ?? "");
   const vision = compact(req.vision);
 

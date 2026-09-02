@@ -50,6 +50,31 @@ test("local fallback preserves one shot per exact supplied clip", () => {
   assert.deepEqual(plan.shots.map((shot: any) => [shot.clipId, shot.start, shot.end]), clips.map((clip) => [clip.id, clip.start, clip.end]));
 });
 
+test("local fallback does not leak the internal authoritative shot list into an individual shot prompt", () => {
+  assert.ok(localPlanModule, "director_local_plan module must exist");
+  const plan = localPlanModule!.buildLocalDirectorPlan({
+    vision: "Follow the exact timecoded script",
+    mustInclude: [
+      "Keep the artist in the red suit.",
+      "AUTHORITATIVE TIMECODED SHOT LIST — preserve every shot, time range, and instruction exactly; enhance prompts only, never merge, omit, reorder, or replace these shots:",
+      "Shot 1 0.00-5.00s: Tight kitchen close-up under warm practical light.",
+      "Shot 2 5.00-10.00s: Giant desert crane shot with a blue convertible.",
+    ].join("\n"),
+    avoid: "No crowd",
+    characterRequired: false,
+    clips: [
+      { id: "shot-1", start: 0, end: 5, sectionLabel: "Shot 1", userDirection: "Tight kitchen close-up under warm practical light." },
+      { id: "shot-2", start: 5, end: 10, sectionLabel: "Shot 2", userDirection: "Giant desert crane shot with a blue convertible." },
+    ],
+  }, []);
+
+  const firstPrompt = plan.shots[0]?.prompt ?? "";
+  assert.match(firstPrompt, /Tight kitchen close-up/i);
+  assert.match(firstPrompt, /Keep the artist in the red suit/i);
+  assert.doesNotMatch(firstPrompt, /AUTHORITATIVE TIMECODED SHOT LIST/i);
+  assert.doesNotMatch(firstPrompt, /Giant desert crane shot/i);
+});
+
 test("API build preserves userDirection and falls back locally after Gemini exhaustion", async () => {
   const buildSource = await readFile(new URL("../scripts/build.mjs", import.meta.url), "utf8");
   assert.match(buildSource, /userDirection/);

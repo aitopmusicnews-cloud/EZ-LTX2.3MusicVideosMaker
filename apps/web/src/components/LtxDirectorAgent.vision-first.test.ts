@@ -42,6 +42,11 @@ test("the Tools rail exposes an editable Director clip amount override", () => {
   assert.match(leftRailSource, /placeholder="Auto"/);
 });
 
-test("clip amount override may differ from the number of timecoded Vision shots", () => {
+test("the Tools rail explains that timecoded Vision shots stay locked", () => {
+  assert.match(leftRailSource, /Timecoded Vision keeps its exact scripted shots/i);
+  assert.match(leftRailSource, /clip amount applies to non-timecoded/i);
+});
+
+test("clip amount override may differ from the number of timecoded Vision shots when explicitly supplied", () => {
   assert.doesNotMatch(patched, /could not preserve every shot in your timecoded Vision/i);
 });
