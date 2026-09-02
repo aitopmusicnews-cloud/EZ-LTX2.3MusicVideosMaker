@@ -12,8 +12,19 @@ import {
 } from "../lib/api.js";
 import { enqueueGeneration } from "../lib/scheduler.js";
 import { toast } from "../lib/toast.js";
+import { parseDirectorVision } from "../lib/directorVisionParser.js";
+import {
+  buildAssistedDirectorPlan,
+  buildStructuredDirectorPlan,
+  materializeDirectorClips,
+  updateDirectorShot,
+  type DirectorPlan,
+  type DirectorClip,
+} from "../lib/directorPlan.js";
+import { selectDirectorGenerationClips, type DirectorGenerationScope } from "../lib/directorGeneration.js";
+import { DirectorProductionSections } from "./DirectorProductionSections.js";
 
-const DIRECTOR_VERSION = 2;
+const DIRECTOR_VERSION = 3;
 const MAX_STORYBOARD_FRAMES = 12;
 const MAX_LIPSYNC_SHOTS = 4;
 
@@ -33,7 +44,6 @@ type StoryboardShot = {
   start: number;
   end: number;
   prompt: string;
-  clipIds: string[];
   imageUrl?: string;
   approved: boolean;
 };
@@ -52,7 +62,7 @@ type DirectorSession = {
   characterUrl?: string;
   characterApproved: boolean;
   shots: StoryboardShot[];
-  productionStarted: boolean;
+  directorPlan?: DirectorPlan;
   lipSyncEnabled: boolean;
   lipSyncStarted: boolean;
   lipSyncedClipIds: string[];
@@ -144,15 +154,14 @@ function pickCameraLanguage(vision: string, bpm: number, variation: number): str
   return pool[Math.abs(variation) % pool.length]!;
 }
 
-function buildCreativePlan(
+function buildCreativeFoundation(
   filename: string | null,
   analysis: AudioAnalysis,
-  clips: Clip[],
   vision: string,
   mustInclude: string,
   avoid: string,
   variation: number,
-): Pick<DirectorSession, "treatment" | "characterPrompt" | "shots"> {
+): { treatment: Treatment; characterPrompt: string } {
   const bpm = analysis.bpm ?? 100;
   const key = analysis.key ?? "an undetermined key";
   const title = cleanTitle(filename);
@@ -170,61 +179,55 @@ function buildCreativePlan(
     "Use recurring visual motifs that transform each time the hook returns.",
     "Balance iconic performance images with unexpected transitional details.",
   ][Math.abs(variation) % 3]!;
-
-  const visualStyle = `A ${mode} music video built directly from your direction: “${trimmedVision}” The song feels ${tempoLanguage} at ${Math.round(bpm)} BPM in ${key}, so the visual rhythm should respond to that energy without overriding your concept. ${variationLanguage}`;
-  const logline = `The artist moves through a visual world shaped by this idea: ${trimmedVision}. The imagery evolves across ${structure}, becoming more emotionally and visually ambitious as the song develops.`;
   const includeLine = mustInclude.trim() ? `Required visual elements: ${mustInclude.trim()}.` : "";
   const avoidLine = avoid.trim() ? `Do not include: ${avoid.trim()}.` : "";
-  const characterPrompt = [
-    `Create the lead recording artist for a music video whose creative direction is: ${trimmedVision}.`,
-    "The artist must have a memorable, repeatable identity, realistic skin texture, consistent facial structure, premium wardrobe appropriate to the concept, and confident screen presence.",
-    includeLine,
-    avoidLine,
-    "Provide cinematic full-body and portrait-ready styling, neutral expression, studio-quality music-video lighting, no text, no logos, and no duplicate people.",
-  ].filter(Boolean).join(" ");
 
-  const sourceSections = (analysis.sections?.length
-    ? analysis.sections
-    : [{ label: "song", start: 0, end: analysis.duration }])
-    .slice(0, MAX_STORYBOARD_FRAMES);
-
-  const shots: StoryboardShot[] = sourceSections.map((section, index) => {
-    const start = section.start ?? clips[index]?.start ?? 0;
-    const end = section.end ?? clips[index]?.end ?? analysis.duration ?? start + 5;
-    const label = section.label || `Section ${index + 1}`;
-    const clipIds = clips
-      .filter((clip) => clip.start < end && clip.end > start)
-      .map((clip) => clip.id);
-    const prompt = [
-      `Creative direction: ${trimmedVision}.`,
-      sectionArc(label, index, sourceSections.length),
-      `For the ${label}, create ${sectionEnergy(label, bpm)}.`,
+  return {
+    treatment: {
+      title: `${title} — ${trimmedVision.slice(0, 58)}${trimmedVision.length > 58 ? "…" : ""}`,
+      logline: `The artist moves through a visual world shaped by this idea: ${trimmedVision}. The imagery evolves across ${structure}, becoming more emotionally and visually ambitious as the song develops.`,
+      visualStyle: `A ${mode} music video built directly from your direction: “${trimmedVision}” The song feels ${tempoLanguage} at ${Math.round(bpm)} BPM in ${key}, so the visual rhythm should respond to that energy without overriding your concept. ${variationLanguage}`,
+      colorPalette: pickPalette(trimmedVision, variation),
+      cameraLanguage: pickCameraLanguage(trimmedVision, bpm, variation),
+    },
+    characterPrompt: [
+      `Create the lead recording artist for a music video whose creative direction is: ${trimmedVision}.`,
+      "The artist must have a memorable, repeatable identity, realistic skin texture, consistent facial structure, premium wardrobe appropriate to the concept, and confident screen presence.",
       includeLine,
       avoidLine,
-      "Use the same approved recording artist, stable identity, concept-appropriate wardrobe, strong cinematic composition, realistic skin, detailed environment, premium music-video lighting, 35mm cinema lens, no text, and no logos.",
-    ].filter(Boolean).join(" ");
+      "Provide cinematic full-body and portrait-ready styling, neutral expression, studio-quality music-video lighting, no text, no logos, and no duplicate people.",
+    ].filter(Boolean).join(" "),
+  };
+}
+
+function buildAssistedShots(analysis: AudioAnalysis, vision: string, mustInclude: string, avoid: string): StoryboardShot[] {
+  const bpm = analysis.bpm ?? 100;
+  const includeLine = mustInclude.trim() ? `Required visual elements: ${mustInclude.trim()}.` : "";
+  const avoidLine = avoid.trim() ? `Do not include: ${avoid.trim()}.` : "";
+  const sections = (analysis.sections?.length
+    ? analysis.sections
+    : [{ label: "song", start: 0, end: analysis.duration ?? 5 }])
+    .slice(0, MAX_STORYBOARD_FRAMES);
+  return sections.map((section, index) => {
+    const start = section.start ?? 0;
+    const end = section.end ?? analysis.duration ?? start + 5;
+    const label = section.label || `Section ${index + 1}`;
     return {
       id: `shot-${index + 1}`,
       label,
       start,
       end,
-      clipIds,
       approved: false,
-      prompt,
+      prompt: [
+        `Creative direction: ${vision}.`,
+        sectionArc(label, index, sections.length),
+        `For the ${label}, create ${sectionEnergy(label, bpm)}.`,
+        includeLine,
+        avoidLine,
+        "Use the same approved recording artist, stable identity, concept-appropriate wardrobe, strong cinematic composition, realistic skin, detailed environment, premium music-video lighting, 35mm cinema lens, no text, and no logos.",
+      ].filter(Boolean).join(" "),
     };
   });
-
-  return {
-    treatment: {
-      title: `${title} — ${trimmedVision.slice(0, 58)}${trimmedVision.length > 58 ? "…" : ""}`,
-      logline,
-      visualStyle,
-      colorPalette: pickPalette(trimmedVision, variation),
-      cameraLanguage: pickCameraLanguage(trimmedVision, bpm, variation),
-    },
-    characterPrompt,
-    shots,
-  };
 }
 
 function buildSession(songId: string): DirectorSession {
@@ -238,17 +241,10 @@ function buildSession(songId: string): DirectorSession {
     treatmentVariation: 0,
     treatmentApproved: false,
     characterApproved: false,
-    productionStarted: false,
     lipSyncEnabled: true,
     lipSyncStarted: false,
     lipSyncedClipIds: [],
-    treatment: {
-      title: "",
-      logline: "",
-      visualStyle: "",
-      colorPalette: "",
-      cameraLanguage: "",
-    },
+    treatment: { title: "", logline: "", visualStyle: "", colorPalette: "", cameraLanguage: "" },
     characterPrompt: "",
     shots: [],
   };
@@ -281,7 +277,6 @@ export function AutoDirector() {
   const [session, setSession] = useState<DirectorSession | null>(null);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
-  const [productionNote, setProductionNote] = useState<string | null>(null);
   const [directorError, setDirectorError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -290,10 +285,8 @@ export function AutoDirector() {
       setOpen(false);
       return;
     }
-
-    const key = storageKey(songId);
     try {
-      const raw = localStorage.getItem(key);
+      const raw = localStorage.getItem(storageKey(songId));
       if (raw) {
         const parsed = JSON.parse(raw) as DirectorSession;
         if (parsed.version === DIRECTOR_VERSION && parsed.songId === songId) {
@@ -304,36 +297,24 @@ export function AutoDirector() {
     } catch (error) {
       console.warn("Could not restore Auto Director session", error);
     }
-
     setSession(buildSession(songId));
     setOpen(true);
   }, [songId, analysis, songFilename, clips.length]);
 
   useEffect(() => {
-    if (!session) return;
-    localStorage.setItem(storageKey(session.songId), JSON.stringify(session));
+    if (session) localStorage.setItem(storageKey(session.songId), JSON.stringify(session));
   }, [session]);
 
-  useEffect(() => {
-    if (!session || session.stage !== "production" || !session.productionStarted || clips.length === 0) return;
-    const allReady = clips.every((clip) => clip.status === "ready" && clip.videoUrl);
-    if (allReady) {
-      setProductionNote("All production clips are ready for performance sync approval.");
-      setSession((current) => current ? { ...current, stage: "lipsync" } : current);
-      setOpen(true);
-    }
-  }, [clips, session?.stage, session?.productionStarted]);
-
   const progress = useMemo(() => ({
-    ready: clips.filter((clip) => clip.status === "ready").length,
+    ready: clips.filter((clip) => clip.status === "ready" && clip.videoUrl).length,
     failed: clips.filter((clip) => clip.status === "failed").length,
     active: clips.filter((clip) => clip.status === "queued" || clip.status === "generating").length,
   }), [clips]);
 
   const performanceClipIds = useMemo(() => {
-    const preferred = clips.filter((clip) => /verse|chorus|hook|bridge|vocal/i.test(clip.sectionLabel || ""));
-    const pool = preferred.length ? preferred : clips;
-    return pool.slice(0, MAX_LIPSYNC_SHOTS).map((clip) => clip.id);
+    const ready = clips.filter((clip) => clip.status === "ready" && clip.videoUrl);
+    const preferred = ready.filter((clip) => /verse|chorus|hook|bridge|vocal/i.test(clip.sectionLabel || ""));
+    return (preferred.length ? preferred : ready).slice(0, MAX_LIPSYNC_SHOTS).map((clip) => clip.id);
   }, [clips]);
 
   if (!songId || !analysis || !session) return null;
@@ -343,9 +324,7 @@ export function AutoDirector() {
   };
 
   const updateTreatment = (key: keyof Treatment, value: string) => {
-    setSession((current) => current
-      ? { ...current, treatment: { ...current.treatment, [key]: value } }
-      : current);
+    setSession((current) => current ? { ...current, treatment: { ...current.treatment, [key]: value } } : current);
   };
 
   const createTreatmentFromVision = (variationDelta = 0) => {
@@ -355,25 +334,50 @@ export function AutoDirector() {
       return;
     }
     const variation = session.treatmentVariation + variationDelta;
-    const plan = buildCreativePlan(
-      songFilename,
-      analysis,
-      clips,
-      vision,
-      session.mustInclude,
-      session.avoid,
-      variation,
-    );
+    const foundation = buildCreativeFoundation(songFilename, analysis, vision, session.mustInclude, session.avoid, variation);
+    const parsedVision = parseDirectorVision(vision);
+    let shots: StoryboardShot[];
+    let directorPlan: DirectorPlan;
+
+    if (parsedVision.mode === "structured") {
+      const basePlan = buildStructuredDirectorPlan(parsedVision.shots, analysis);
+      const enrichedSections = basePlan.sections.map((section) => ({
+        ...section,
+        shots: section.shots.map((shot) => {
+          const prompt = [
+            shot.rawText,
+            session.mustInclude.trim() ? `Required: ${session.mustInclude.trim()}.` : "",
+            session.avoid.trim() ? `Avoid: ${session.avoid.trim()}.` : "",
+            "Preserve the user's exact shot intention, timing, camera direction, lyric cues, and on-screen text. Use the same approved artist identity and premium music-video continuity.",
+          ].filter(Boolean).join(" ");
+          return { ...shot, prompt };
+        }),
+      }));
+      directorPlan = { ...basePlan, sections: enrichedSections };
+      shots = directorPlan.sections.flatMap((section) => section.shots.map((shot) => ({
+        id: shot.id,
+        label: shot.label,
+        start: shot.start,
+        end: shot.end,
+        prompt: shot.prompt,
+        approved: false,
+      })));
+    } else {
+      shots = buildAssistedShots(analysis, vision, session.mustInclude, session.avoid);
+      directorPlan = buildAssistedDirectorPlan(shots);
+    }
+
     setDirectorError(null);
     setSession({
       ...session,
-      ...plan,
+      ...foundation,
+      shots,
+      directorPlan,
       stage: "treatment",
       treatmentVariation: variation,
       treatmentApproved: false,
       characterApproved: false,
       characterUrl: undefined,
-      productionStarted: false,
       lipSyncStarted: false,
       lipSyncedClipIds: [],
       renderUrl: undefined,
@@ -385,11 +389,7 @@ export function AutoDirector() {
     for (let attempt = 1; attempt <= 2; attempt += 1) {
       try {
         setBusy(attempt === 1 ? label : "Image service is waking up. Retrying…");
-        const result = await startTextToImage({
-          promptText: prompt,
-          ratio: "16:9",
-          model: "sdxl",
-        }) as unknown as { imageUrl?: string; url?: string };
+        const result = await startTextToImage({ promptText: prompt, ratio: "16:9", model: "sdxl" }) as unknown as { imageUrl?: string; url?: string };
         const imageUrl = result.imageUrl ?? result.url;
         if (!imageUrl) throw new Error("The image service returned no image URL.");
         return imageUrl;
@@ -437,14 +437,9 @@ export function AutoDirector() {
         const characterAnchor = working.characterUrl
           ? "Use the exact same approved artist identity and wardrobe from the character reference."
           : working.characterPrompt;
-        const imageUrl = await requestImageWithRetry(
-          `${characterAnchor} ${shot.prompt}`,
-          `Generating storyboard ${index + 1} of ${working.shots.length}: ${shot.label}`,
-        );
+        const imageUrl = await requestImageWithRetry(`${characterAnchor} ${shot.prompt}`, `Generating storyboard ${index + 1} of ${working.shots.length}: ${shot.label}`);
         addLookbook(imageUrl);
-        const nextShots = working.shots.map((item) => item.id === shot.id
-          ? { ...item, imageUrl, approved: false }
-          : item);
+        const nextShots = working.shots.map((item) => item.id === shot.id ? { ...item, imageUrl, approved: false } : item);
         working = { ...working, shots: nextShots };
         setSession(working);
         void saveImageToLibrary({
@@ -467,54 +462,67 @@ export function AutoDirector() {
   };
 
   const approveStoryboard = () => {
-    const incomplete = session.shots.some((shot) => !shot.imageUrl || !shot.approved);
-    if (incomplete) {
+    if (!session.directorPlan) {
+      toast.warning("Build the Director plan first");
+      return;
+    }
+    if (session.shots.some((shot) => !shot.imageUrl || !shot.approved)) {
       toast.warning("Generate and approve every storyboard frame first");
       return;
     }
-
-    for (const shot of session.shots) {
-      shot.clipIds.forEach((clipId, index) => {
-        updateClip(clipId, {
-          prompt: `${shot.prompt} Preserve the approved artist identity and storyboard composition.`,
-          archetypeUrl: shot.imageUrl,
-          seedImageUrl: shot.imageUrl,
-          source: index === 0 ? "imageToVideo" : "continue",
-          model: "agnes-video-v2.0",
-          sectionLabel: shot.label,
-          status: "empty",
-          lastError: undefined,
-        });
-      });
+    const activeJobs = useStore.getState().jobs.some((job) => job.state === "queued" || job.state === "running");
+    if (activeJobs) {
+      toast.warning("Finish or cancel current generation jobs before rebuilding the Director timeline");
+      return;
     }
-    updateSession({ stage: "production" });
+
+    const boards = new Map(session.shots.map((shot) => [shot.id, shot]));
+    const plan: DirectorPlan = {
+      ...session.directorPlan,
+      sections: session.directorPlan.sections.map((section) => ({
+        ...section,
+        shots: section.shots.map((shot) => {
+          const board = boards.get(shot.id);
+          return board ? { ...shot, prompt: board.prompt, approved: true } : shot;
+        }),
+      })),
+    };
+    const existing = new Map(useStore.getState().clips.map((clip) => [clip.id, clip]));
+    const next = materializeDirectorClips(plan).map((clip) => {
+      const board = boards.get(clip.directorShotId || "");
+      const prepared: DirectorClip = {
+        ...clip,
+        prompt: board?.prompt || clip.prompt,
+        archetypeUrl: board?.imageUrl,
+        seedImageUrl: board?.imageUrl,
+      };
+      const previous = existing.get(prepared.id);
+      if (
+        previous?.status === "ready" && previous.videoUrl &&
+        previous.start === prepared.start && previous.end === prepared.end &&
+        previous.prompt === prepared.prompt
+      ) {
+        return { ...prepared, status: "ready" as const, videoUrl: previous.videoUrl, thumbnailUrl: previous.thumbnailUrl };
+      }
+      return prepared;
+    });
+    useStore.setState({ clips: next, jobs: [] });
+    updateSession({ directorPlan: plan, stage: "production" });
+    toast.success(`Timeline prepared: ${plan.sections.flatMap((section) => section.shots).length} creative shots. Nothing has been generated yet.`);
   };
 
-  const startProduction = () => {
+  const enqueueDirectorScope = (scope: DirectorGenerationScope, regenerate = false) => {
+    if (!session.directorPlan) return;
     const currentClips = useStore.getState().clips;
-    if (!currentClips.length) return;
-    updateSession({ productionStarted: true });
-    setProductionNote("The Director is generating the approved storyboard clips. You can close this window; production continues in the queue.");
-
-    for (const clip of currentClips) {
-      const source = clip.source === "continue" ? "continue" : "imageToVideo";
-      enqueueGeneration({
-        clipId: clip.id,
-        source,
-        seedImageUrl: clip.archetypeUrl ?? clip.seedImageUrl ?? session.characterUrl ?? lookbook[0] ?? "",
-        prompt: clip.prompt || `Cinematic artist performance based on this approved vision: ${session.vision}`,
-        duration: clip.end - clip.start,
-        sectionLabel: clip.sectionLabel || "song section",
-        energy: 0.6,
-        model: "agnes-video-v2.0",
-      });
+    const selected = selectDirectorGenerationClips(session.directorPlan, currentClips, scope, regenerate);
+    if (!selected.length) {
+      toast.info("Nothing new to generate in that selection");
+      return;
     }
-    toast.success("Automated production queue started");
-  };
-
-  const retryFailedProduction = () => {
-    const failed = useStore.getState().clips.filter((clip) => clip.status === "failed");
-    for (const clip of failed) {
+    for (const clip of selected) {
+      if (regenerate && clip.status === "ready") {
+        updateClip(clip.id, { status: "empty", videoUrl: undefined, thumbnailUrl: undefined, generationTaskId: undefined, lastError: undefined });
+      }
       enqueueGeneration({
         clipId: clip.id,
         source: clip.source === "continue" ? "continue" : "imageToVideo",
@@ -526,6 +534,24 @@ export function AutoDirector() {
         model: "agnes-video-v2.0",
       });
     }
+    toast.success(`Queued ${selected.length} approved generation request${selected.length === 1 ? "" : "s"}`);
+  };
+
+  const generateShot = (shotId: string, regenerate = false) => {
+    enqueueDirectorScope({ type: "shot", shotId }, regenerate);
+  };
+
+  const generateSection = (sectionId: string) => {
+    enqueueDirectorScope({ type: "section", sectionId });
+  };
+
+  const generateAllApproved = () => {
+    enqueueDirectorScope({ type: "all" });
+  };
+
+  const approveTechnicalSplit = (shotId: string) => {
+    if (!session.directorPlan) return;
+    updateSession({ directorPlan: updateDirectorShot(session.directorPlan, shotId, { technicalSplitApproved: true }) });
   };
 
   const runLipSync = async () => {
@@ -553,17 +579,8 @@ export function AutoDirector() {
         updateClip(clip.id, { generationTaskId: task.id });
         const final = await pollTask(task.id, 4000, 1_800_000);
         const outputUrl = taskOutputUrl(final);
-        if ((final.status || "").toUpperCase() !== "SUCCEEDED" || !outputUrl) {
-          throw new Error(final.error ?? `LipDub failed for ${clip.sectionLabel || clip.id}`);
-        }
-        updateClip(clip.id, {
-          videoUrl: outputUrl,
-          source: "lipSync",
-          model: "agnes-video-2.5-flash",
-          status: "ready",
-          generationTaskId: undefined,
-          lastError: undefined,
-        });
+        if ((final.status || "").toUpperCase() !== "SUCCEEDED" || !outputUrl) throw new Error(final.error ?? `LipDub failed for ${clip.sectionLabel || clip.id}`);
+        updateClip(clip.id, { videoUrl: outputUrl, source: "lipSync", model: "agnes-video-2.5-flash", status: "ready", generationTaskId: undefined, lastError: undefined });
         synced = [...synced, clip.id];
         setSession((current) => current ? { ...current, lipSyncedClipIds: synced } : current);
         void saveClipToServer({
@@ -584,7 +601,7 @@ export function AutoDirector() {
       setDirectorError(message);
       toast.error(`Automated LipDub stopped: ${message}`);
       const active = useStore.getState().clips.find((clip) => clip.status === "generating");
-      if (active) updateClip(active.id, { status: "ready", generationTaskId: undefined, lastError: message });
+      if (active) updateClip(active.id, { status: active.videoUrl ? "ready" : "failed", generationTaskId: undefined, lastError: message });
     } finally {
       setBusy(null);
     }
@@ -594,30 +611,18 @@ export function AutoDirector() {
     if (!audioUrl || !analysis.duration) return;
     const ready = useStore.getState().clips
       .filter((clip) => clip.status === "ready" && clip.videoUrl)
-      .map((clip) => ({
-        start: clip.start,
-        end: clip.end,
-        videoUrl: clip.videoUrl!,
-        source: clip.source,
-      }));
+      .map((clip) => ({ start: clip.start, end: clip.end, videoUrl: clip.videoUrl!, source: clip.source }));
     if (!ready.length) {
       toast.warning("No approved clips are ready to render");
       return;
     }
-
     setBusy("Rendering final approved music video…");
     try {
       const finalProjectId = projectId ?? `proj-${crypto.randomUUID().slice(0, 8)}`;
       if (!projectId) useStore.setState({ projectId: finalProjectId });
       const finalName = projectName || cleanTitle(songFilename);
       if (!projectName) setProjectName(finalName);
-      const result = await renderTimeline({
-        projectId: finalProjectId,
-        audioUrl,
-        duration: analysis.duration,
-        clips: ready,
-        fades: true,
-      });
+      const result = await renderTimeline({ projectId: finalProjectId, audioUrl, duration: analysis.duration, clips: ready, fades: true });
       updateSession({ renderUrl: result.url });
       await saveProjectToServer(finalProjectId, finalName, useStore.getState().getSnapshot());
       toast.success("Final music video rendered and project saved");
@@ -638,23 +643,20 @@ export function AutoDirector() {
   };
 
   if (!open) {
-    return (
-      <button type="button" style={directorButtonStyle} onClick={() => setOpen(true)}>
-        ✦ Director
-      </button>
-    );
+    return <button type="button" style={directorButtonStyle} onClick={() => setOpen(true)}>✦ Director</button>;
   }
 
   const stageIndex = activeStageIndex(session.stage);
   const allBoardsGenerated = session.shots.length > 0 && session.shots.every((shot) => !!shot.imageUrl);
   const allBoardsApproved = session.shots.length > 0 && session.shots.every((shot) => shot.approved);
+  const structured = session.directorPlan?.mode === "structured";
 
   return (
     <div style={overlayStyle} onClick={(event) => { if (event.target === event.currentTarget && !busy) setOpen(false); }}>
       <div style={modalStyle}>
         <div style={headerStyle}>
           <div>
-            <div style={{ fontSize: 11, letterSpacing: "0.12em", textTransform: "uppercase", opacity: 0.55 }}>Automated production</div>
+            <div style={{ fontSize: 11, letterSpacing: "0.12em", textTransform: "uppercase", opacity: 0.55 }}>Vision-first production</div>
             <h2 style={{ margin: "4px 0 0", fontSize: 22 }}>AI Music Video Director</h2>
           </div>
           <div style={{ display: "flex", gap: 8 }}>
@@ -671,72 +673,36 @@ export function AutoDirector() {
             </div>
           ))}
         </div>
-
         {busy && <div style={busyStyle}>{busy}</div>}
 
         <div style={bodyStyle}>
-          {directorError && (
-            <div style={errorStyle}>
-              <strong>Director needs attention</strong>
-              <div style={{ marginTop: 5 }}>{directorError}</div>
-            </div>
-          )}
+          {directorError && <div style={errorStyle}><strong>Director needs attention</strong><div style={{ marginTop: 5 }}>{directorError}</div></div>}
 
           {session.stage === "vision" && (
             <section>
               <h3 style={sectionTitleStyle}>1. What is your vision for this video?</h3>
-              <p style={helpStyle}>Describe the world, story, mood, locations, performance style, wardrobe, era, camera feeling, or references you have in mind. The Director will build everything else around your words.</p>
+              <p style={helpStyle}>Your words are the highest authority. Paste a detailed timecoded shot list and the Director will follow its shot count and timing, or enter a general concept and let the Director suggest a plan.</p>
               <div style={analysisStripStyle}>
                 <Summary label="Tempo" value={`${Math.round(analysis.bpm ?? 0)} BPM`} />
                 <Summary label="Key" value={analysis.key || "Unknown"} />
-                <Summary label="Sections" value={String(analysis.sections?.length ?? 0)} />
+                <Summary label="Song sections" value={String(analysis.sections?.length ?? 0)} />
               </div>
-              <Field
-                label="Your creative vision"
-                value={session.vision}
-                onChange={(value) => updateSession({ vision: value })}
-                multiline
-                placeholder="Example: A lonely artist drives through a neon city at night, performing to camera at red lights. The chorus opens into a huge rooftop performance in the rain. Moody, cinematic, futuristic, but still emotional and realistic."
-              />
+              <Field label="Your creative vision" value={session.vision} onChange={(value) => updateSession({ vision: value })} multiline placeholder="Paste your full timecoded script/shot list here, or describe the visual concept." />
               <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 10 }}>
-                {VISION_STARTERS.map((starter) => (
-                  <button
-                    key={starter}
-                    type="button"
-                    className="btn ghost"
-                    onClick={() => updateSession({ vision: session.vision.trim() ? `${session.vision.trim()} ${starter}.` : `${starter}. ` })}
-                  >
-                    {starter}
-                  </button>
-                ))}
+                {VISION_STARTERS.map((starter) => <button key={starter} type="button" className="btn ghost" onClick={() => updateSession({ vision: session.vision.trim() ? `${session.vision.trim()} ${starter}.` : `${starter}. ` })}>{starter}</button>)}
               </div>
-              <Field
-                label="Must include"
-                value={session.mustInclude}
-                onChange={(value) => updateSession({ mustInclude: value })}
-                multiline
-                placeholder="Specific locations, props, wardrobe, colors, actions, symbols, or story moments."
-              />
-              <Field
-                label="Avoid"
-                value={session.avoid}
-                onChange={(value) => updateSession({ avoid: value })}
-                multiline
-                placeholder="Anything you do not want: crowds, cars, violence, fantasy effects, certain colors, etc."
-              />
-              <ActionRow>
-                <button type="button" className="btn primary" onClick={() => createTreatmentFromVision(0)} disabled={!!busy || session.vision.trim().length < 8}>
-                  Build treatment from my vision
-                </button>
-              </ActionRow>
+              <Field label="Must include" value={session.mustInclude} onChange={(value) => updateSession({ mustInclude: value })} multiline placeholder="Specific locations, props, wardrobe, colors, actions, symbols, or story moments." />
+              <Field label="Avoid" value={session.avoid} onChange={(value) => updateSession({ avoid: value })} multiline placeholder="Anything you do not want." />
+              <ActionRow><button type="button" className="btn primary" onClick={() => createTreatmentFromVision(0)} disabled={!!busy || session.vision.trim().length < 8}>Build treatment from my vision</button></ActionRow>
             </section>
           )}
 
           {session.stage === "treatment" && (
             <section>
               <h3 style={sectionTitleStyle}>2. Approve the creative treatment</h3>
-              <p style={helpStyle}>This treatment is anchored to your vision and shaped by the song's tempo, key, and section structure. Edit anything before approving.</p>
+              <p style={helpStyle}>{structured ? "Structured Vision detected. Your timecodes and shot count are locked as the creative plan; the treatment only supports them." : "This treatment is anchored to your vision and shaped by the song analysis. Edit anything before approving."}</p>
               <div style={visionNoteStyle}><strong>Your direction:</strong> {session.vision}</div>
+              {structured && <div style={noteStyle}>Vision override active: {session.shots.length} explicit creative shots detected. The Director will not invent extra creative shots.</div>}
               <Field label="Treatment title" value={session.treatment.title} onChange={(value) => updateTreatment("title", value)} />
               <Field label="Concept" value={session.treatment.logline} onChange={(value) => updateTreatment("logline", value)} multiline />
               <Field label="Visual style" value={session.treatment.visualStyle} onChange={(value) => updateTreatment("visualStyle", value)} multiline />
@@ -744,7 +710,7 @@ export function AutoDirector() {
               <Field label="Camera language" value={session.treatment.cameraLanguage} onChange={(value) => updateTreatment("cameraLanguage", value)} multiline />
               <ActionRow>
                 <button type="button" className="btn ghost" onClick={() => updateSession({ stage: "vision" })}>Edit my vision</button>
-                <button type="button" className="btn" onClick={() => createTreatmentFromVision(1)}>Generate another treatment</button>
+                <button type="button" className="btn" onClick={() => createTreatmentFromVision(1)}>Refresh treatment only</button>
                 <button type="button" className="btn primary" onClick={() => updateSession({ treatmentApproved: true, stage: "character" })}>Approve treatment</button>
               </ActionRow>
             </section>
@@ -753,26 +719,12 @@ export function AutoDirector() {
           {session.stage === "character" && (
             <section>
               <h3 style={sectionTitleStyle}>3. Approve the main character</h3>
-              <p style={helpStyle}>The character brief now inherits your approved vision, required elements, and exclusions. Generate until the identity and wardrobe are right.</p>
+              <p style={helpStyle}>The character brief inherits your Vision. Generate until the identity and wardrobe are right.</p>
               <Field label="Character brief" value={session.characterPrompt} onChange={(value) => updateSession({ characterPrompt: value })} multiline />
-              {session.characterUrl && (
-                <img
-                  src={session.characterUrl}
-                  alt="Generated artist reference"
-                  style={heroImageStyle}
-                  onError={() => setDirectorError("The character was generated, but the image could not be displayed. Use Regenerate character to try again.")}
-                />
-              )}
+              {session.characterUrl && <img src={session.characterUrl} alt="Generated artist reference" style={heroImageStyle} />}
               <ActionRow>
                 <button type="button" className="btn" onClick={() => void generateCharacter()} disabled={!!busy}>{session.characterUrl ? "Regenerate character" : "Generate character"}</button>
-                <button
-                  type="button"
-                  className="btn primary"
-                  disabled={!session.characterUrl || !!busy}
-                  onClick={() => updateSession({ characterApproved: true, stage: "storyboard" })}
-                >
-                  Approve character
-                </button>
+                <button type="button" className="btn primary" disabled={!session.characterUrl || !!busy} onClick={() => updateSession({ characterApproved: true, stage: "storyboard" })}>Approve character</button>
               </ActionRow>
             </section>
           )}
@@ -780,99 +732,55 @@ export function AutoDirector() {
           {session.stage === "storyboard" && (
             <section>
               <h3 style={sectionTitleStyle}>4. Approve the storyboard</h3>
-              <p style={helpStyle}>Every section prompt is derived from your vision and adjusted for that part of the song. Regenerate any frame before approval.</p>
+              <p style={helpStyle}>{structured ? `Your Vision supplied ${session.shots.length} creative shots. Their timing and order are preserved.` : "These are Director suggestions. Review them before production."}</p>
               <ActionRow>
-                <button type="button" className="btn" onClick={() => void generateStoryboard()} disabled={!!busy}>
-                  {allBoardsGenerated ? "Regenerate missing frames" : "Generate storyboard frames"}
-                </button>
-                <button
-                  type="button"
-                  className="btn ghost"
-                  disabled={!allBoardsGenerated || !!busy}
-                  onClick={() => setSession((current) => current ? { ...current, shots: current.shots.map((shot) => ({ ...shot, approved: true })) } : current)}
-                >
-                  Approve all frames
-                </button>
+                <button type="button" className="btn" onClick={() => void generateStoryboard()} disabled={!!busy}>{allBoardsGenerated ? "Generate missing frames" : "Generate storyboard frames"}</button>
+                <button type="button" className="btn ghost" disabled={!allBoardsGenerated || !!busy} onClick={() => setSession((current) => current ? { ...current, shots: current.shots.map((shot) => ({ ...shot, approved: true })) } : current)}>Approve all frames</button>
               </ActionRow>
               <div style={boardGridStyle}>
                 {session.shots.map((shot, index) => (
                   <div key={shot.id} style={{ ...boardCardStyle, borderColor: shot.approved ? "rgba(34,197,94,.65)" : "rgba(255,255,255,.12)" }}>
-                    {shot.imageUrl
-                      ? <img src={shot.imageUrl} alt={`${shot.label} storyboard`} style={boardImageStyle} />
-                      : <div style={{ ...boardImageStyle, display: "grid", placeItems: "center", background: "#18181b", color: "#71717a" }}>Frame {index + 1}</div>}
+                    {shot.imageUrl ? <img src={shot.imageUrl} alt={`${shot.label} storyboard`} style={boardImageStyle} /> : <div style={{ ...boardImageStyle, display: "grid", placeItems: "center", background: "#18181b", color: "#71717a" }}>Frame {index + 1}</div>}
                     <div style={{ padding: 12 }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
-                        <strong>{shot.label}</strong>
-                        <span style={{ fontSize: 11, opacity: 0.55 }}>{shot.start.toFixed(1)}–{shot.end.toFixed(1)}s</span>
-                      </div>
-                      <textarea
-                        value={shot.prompt}
-                        onChange={(event) => setSession((current) => current ? {
-                          ...current,
-                          shots: current.shots.map((item) => item.id === shot.id ? { ...item, prompt: event.target.value, approved: false } : item),
-                        } : current)}
-                        style={textareaStyle}
-                      />
+                      <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}><strong>{shot.label}</strong><span style={{ fontSize: 11, opacity: 0.55 }}>{shot.start.toFixed(1)}–{shot.end.toFixed(1)}s</span></div>
+                      <textarea value={shot.prompt} onChange={(event) => setSession((current) => current ? { ...current, shots: current.shots.map((item) => item.id === shot.id ? { ...item, prompt: event.target.value, approved: false } : item) } : current)} style={textareaStyle} />
                       <ActionRow>
                         <button type="button" className="btn ghost" disabled={!!busy} onClick={() => void generateStoryboard(shot.id)}>Regenerate frame</button>
-                        <button
-                          type="button"
-                          className={shot.approved ? "btn primary" : "btn"}
-                          disabled={!shot.imageUrl}
-                          onClick={() => setSession((current) => current ? {
-                            ...current,
-                            shots: current.shots.map((item) => item.id === shot.id ? { ...item, approved: !item.approved } : item),
-                          } : current)}
-                        >
-                          {shot.approved ? "Approved ✓" : "Approve frame"}
-                        </button>
+                        <button type="button" className={shot.approved ? "btn primary" : "btn"} disabled={!shot.imageUrl} onClick={() => setSession((current) => current ? { ...current, shots: current.shots.map((item) => item.id === shot.id ? { ...item, approved: !item.approved } : item) } : current)}>{shot.approved ? "Approved ✓" : "Approve frame"}</button>
                       </ActionRow>
                     </div>
                   </div>
                 ))}
               </div>
-              <ActionRow>
-                <button type="button" className="btn primary" disabled={!allBoardsApproved || !!busy} onClick={approveStoryboard}>
-                  Approve storyboard and build timeline
-                </button>
-              </ActionRow>
+              <ActionRow><button type="button" className="btn primary" disabled={!allBoardsApproved || !!busy} onClick={approveStoryboard}>Approve storyboard and build controlled timeline</button></ActionRow>
             </section>
           )}
 
-          {session.stage === "production" && (
-            <section>
-              <h3 style={sectionTitleStyle}>5. Approve automated clip production</h3>
-              <p style={helpStyle}>The Director will generate every timeline clip from the approved storyboard while preserving your vision and continuity between neighboring shots.</p>
-              <div style={summaryGridStyle}>
-                <Summary label="Ready" value={`${progress.ready}/${clips.length}`} />
-                <Summary label="Generating" value={String(progress.active)} />
-                <Summary label="Failed" value={String(progress.failed)} />
-              </div>
-              {productionNote && <div style={noteStyle}>{productionNote}</div>}
-              <ActionRow>
-                {!session.productionStarted && <button type="button" className="btn primary" onClick={startProduction}>Approve and start production</button>}
-                {session.productionStarted && progress.failed > 0 && <button type="button" className="btn" onClick={retryFailedProduction}>Retry failed clips</button>}
-                {session.productionStarted && <button type="button" className="btn ghost" onClick={() => setOpen(false)}>Continue in background</button>}
-              </ActionRow>
-            </section>
+          {session.stage === "production" && session.directorPlan && (
+            <DirectorProductionSections
+              plan={session.directorPlan}
+              clips={clips}
+              onGenerateShot={generateShot}
+              onGenerateSection={generateSection}
+              onGenerateAll={generateAllApproved}
+              onApproveTechnicalSplit={approveTechnicalSplit}
+              onContinue={() => updateSession({ stage: "lipsync" })}
+            />
           )}
 
           {session.stage === "lipsync" && (
             <section>
               <h3 style={sectionTitleStyle}>6. Approve performance synchronization</h3>
-              <p style={helpStyle}>The Director selected up to {MAX_LIPSYNC_SHOTS} key vocal-performance shots for Agnes LipDub. This step is optional.</p>
+              <p style={helpStyle}>Lip sync is optional and only starts when you press the button.</p>
               <div style={summaryGridStyle}>
                 <Summary label="Selected shots" value={String(performanceClipIds.length)} />
                 <Summary label="Completed" value={String(session.lipSyncedClipIds.length)} />
-                <Summary label="Remaining" value={String(Math.max(0, performanceClipIds.length - session.lipSyncedClipIds.length))} />
+                <Summary label="Ready timeline" value={`${progress.ready}/${clips.length}`} />
               </div>
-              <label style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 18 }}>
-                <input type="checkbox" checked={session.lipSyncEnabled} onChange={(event) => updateSession({ lipSyncEnabled: event.target.checked })} />
-                Lip-sync selected performance shots to the uploaded song
-              </label>
+              <label style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 18 }}><input type="checkbox" checked={session.lipSyncEnabled} onChange={(event) => updateSession({ lipSyncEnabled: event.target.checked })} />Lip-sync selected performance shots to the uploaded song</label>
               <ActionRow>
-                {session.lipSyncEnabled && <button type="button" className="btn primary" onClick={() => void runLipSync()} disabled={!!busy}>Approve and run LipDub</button>}
-                <button type="button" className="btn ghost" onClick={() => updateSession({ stage: "final" })} disabled={!!busy}>Skip LipDub</button>
+                {session.lipSyncEnabled && <button type="button" className="btn primary" onClick={() => void runLipSync()} disabled={!!busy || performanceClipIds.length === 0}>Approve and run LipDub</button>}
+                <button type="button" className="btn ghost" onClick={() => updateSession({ stage: "final" })} disabled={!!busy}>Skip / continue to final</button>
               </ActionRow>
             </section>
           )}
@@ -880,22 +788,16 @@ export function AutoDirector() {
           {session.stage === "final" && (
             <section>
               <h3 style={sectionTitleStyle}>7. Approve the final cut</h3>
-              <p style={helpStyle}>The timeline is ready. Approving this step renders the full song with edge fades, saves the project, and stores the final video in the render library.</p>
+              <p style={helpStyle}>Final render only assembles ready media. It never starts or restarts video generation.</p>
               <div style={summaryGridStyle}>
-                <Summary label="Timeline clips" value={String(clips.length)} />
+                <Summary label="Technical segments" value={String(clips.length)} />
                 <Summary label="Ready" value={String(progress.ready)} />
-                <Summary label="LipDub shots" value={String(session.lipSyncedClipIds.length)} />
+                <Summary label="Generating" value={String(progress.active)} />
               </div>
-              {session.renderUrl && (
-                <div style={{ marginTop: 20 }}>
-                  <video src={session.renderUrl} controls style={{ width: "100%", borderRadius: 12, background: "#000" }} />
-                  <a className="btn primary" href={session.renderUrl} target="_blank" rel="noreferrer" style={{ display: "inline-block", marginTop: 12 }}>Open final video</a>
-                </div>
-              )}
+              {session.renderUrl && <div style={{ marginTop: 20 }}><video src={session.renderUrl} controls style={{ width: "100%", borderRadius: 12, background: "#000" }} /><a className="btn primary" href={session.renderUrl} target="_blank" rel="noreferrer" style={{ display: "inline-block", marginTop: 12 }}>Open final video</a></div>}
               <ActionRow>
-                <button type="button" className="btn primary" onClick={() => void renderFinal()} disabled={!!busy || progress.ready === 0}>
-                  {session.renderUrl ? "Render updated final cut" : "Approve and render final video"}
-                </button>
+                <button type="button" className="btn primary" onClick={() => void renderFinal()} disabled={!!busy || progress.ready === 0 || progress.active > 0}>{session.renderUrl ? "Render updated final cut" : "Approve and render final video"}</button>
+                <button type="button" className="btn ghost" onClick={() => updateSession({ stage: "production" })}>Back to production</button>
               </ActionRow>
             </section>
           )}
@@ -905,84 +807,16 @@ export function AutoDirector() {
   );
 }
 
-function Field({
-  label,
-  value,
-  onChange,
-  multiline = false,
-  placeholder,
-}: {
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-  multiline?: boolean;
-  placeholder?: string;
-}) {
-  return (
-    <label style={{ display: "block", marginTop: 14 }}>
-      <span style={{ display: "block", marginBottom: 6, fontSize: 12, opacity: 0.62 }}>{label}</span>
-      {multiline
-        ? <textarea value={value} onChange={(event) => onChange(event.target.value)} style={textareaStyle} placeholder={placeholder} />
-        : <input value={value} onChange={(event) => onChange(event.target.value)} style={inputStyle} placeholder={placeholder} />}
-    </label>
-  );
+function Field({ label, value, onChange, multiline = false, placeholder }: { label: string; value: string; onChange: (value: string) => void; multiline?: boolean; placeholder?: string }) {
+  return <label style={{ display: "block", marginTop: 14 }}><span style={{ display: "block", marginBottom: 6, fontSize: 12, opacity: 0.62 }}>{label}</span>{multiline ? <textarea value={value} onChange={(event) => onChange(event.target.value)} style={textareaStyle} placeholder={placeholder} /> : <input value={value} onChange={(event) => onChange(event.target.value)} style={inputStyle} placeholder={placeholder} />}</label>;
 }
+function ActionRow({ children }: { children: ReactNode }) { return <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginTop: 20 }}>{children}</div>; }
+function Summary({ label, value }: { label: string; value: string }) { return <div style={{ padding: 14, borderRadius: 10, background: "rgba(255,255,255,.045)", border: "1px solid rgba(255,255,255,.08)" }}><div style={{ fontSize: 11, opacity: 0.55 }}>{label}</div><div style={{ marginTop: 4, fontSize: 22, fontWeight: 700 }}>{value}</div></div>; }
 
-function ActionRow({ children }: { children: ReactNode }) {
-  return <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginTop: 20 }}>{children}</div>;
-}
-
-function Summary({ label, value }: { label: string; value: string }) {
-  return (
-    <div style={{ padding: 14, borderRadius: 10, background: "rgba(255,255,255,.045)", border: "1px solid rgba(255,255,255,.08)" }}>
-      <div style={{ fontSize: 11, opacity: 0.55 }}>{label}</div>
-      <div style={{ marginTop: 4, fontSize: 22, fontWeight: 700 }}>{value}</div>
-    </div>
-  );
-}
-
-const overlayStyle: CSSProperties = {
-  position: "fixed",
-  inset: 0,
-  zIndex: 500,
-  display: "grid",
-  placeItems: "center",
-  padding: 18,
-  background: "rgba(0,0,0,.76)",
-  backdropFilter: "blur(8px)",
-};
-
-const modalStyle: CSSProperties = {
-  width: "min(1080px, 96vw)",
-  maxHeight: "92vh",
-  display: "flex",
-  flexDirection: "column",
-  overflow: "hidden",
-  color: "#fafafa",
-  background: "#09090b",
-  border: "1px solid rgba(255,255,255,.14)",
-  borderRadius: 16,
-  boxShadow: "0 30px 100px rgba(0,0,0,.55)",
-};
-
-const headerStyle: CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "space-between",
-  gap: 16,
-  padding: "18px 20px",
-  borderBottom: "1px solid rgba(255,255,255,.08)",
-};
-
-const stepRowStyle: CSSProperties = {
-  display: "flex",
-  flexWrap: "wrap",
-  gap: 14,
-  padding: "12px 20px",
-  borderBottom: "1px solid rgba(255,255,255,.08)",
-  background: "rgba(255,255,255,.025)",
-};
-
+const overlayStyle: CSSProperties = { position: "fixed", inset: 0, zIndex: 500, display: "grid", placeItems: "center", padding: 18, background: "rgba(0,0,0,.76)", backdropFilter: "blur(8px)" };
+const modalStyle: CSSProperties = { width: "min(1080px, 96vw)", maxHeight: "92vh", display: "flex", flexDirection: "column", overflow: "hidden", color: "#fafafa", background: "#09090b", border: "1px solid rgba(255,255,255,.14)", borderRadius: 16, boxShadow: "0 30px 100px rgba(0,0,0,.55)" };
+const headerStyle: CSSProperties = { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, padding: "18px 20px", borderBottom: "1px solid rgba(255,255,255,.08)" };
+const stepRowStyle: CSSProperties = { display: "flex", flexWrap: "wrap", gap: 14, padding: "12px 20px", borderBottom: "1px solid rgba(255,255,255,.08)", background: "rgba(255,255,255,.025)" };
 const stepStyle: CSSProperties = { display: "flex", alignItems: "center", gap: 7, fontSize: 12 };
 const stepDotStyle: CSSProperties = { width: 8, height: 8, borderRadius: 999 };
 const bodyStyle: CSSProperties = { padding: 20, overflowY: "auto" };
