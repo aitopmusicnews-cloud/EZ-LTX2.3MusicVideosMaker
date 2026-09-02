@@ -5,6 +5,7 @@ import { patchOptionalCharacterConditioning } from "../../scripts/optional-chara
 import { patchDirectorChat } from "../../scripts/director-chat-patch.mjs";
 import { patchDirectorLeftRailLauncher } from "../../scripts/left-rail-tools.patch.mjs";
 import { patchDirectorMultiCharacter } from "../../scripts/director-multichar.patch.mjs";
+import { patchDirectorAssetEditing } from "../../scripts/director-asset-editing.patch.mjs";
 
 const assetsSource = await readFile(new URL("./DirectorAssetsPanel.tsx", import.meta.url), "utf8");
 const sectionSource = await readFile(new URL("./DirectorSectionReview.tsx", import.meta.url), "utf8");
@@ -19,12 +20,13 @@ let patchedAgent = patchOptionalCharacterConditioning(agentSource, replaceRequir
 patchedAgent = patchDirectorChat(patchedAgent, replaceRequired);
 patchedAgent = patchDirectorLeftRailLauncher(patchedAgent, replaceRequired);
 patchedAgent = patchDirectorMultiCharacter(patchedAgent, replaceRequired);
+patchedAgent = patchDirectorAssetEditing(patchedAgent, replaceRequired);
 
 test("reusable generated scene and shot image cards expose inline chat and character pickers", () => {
   assert.match(assetsSource, /AssetEditChat/);
   assert.match(assetsSource, /DirectorCharacterPicker/);
-  assert.match(assetsSource, /type:\s*"scene_image"/);
-  assert.match(assetsSource, /type:\s*"shot_image"/);
+  assert.match(assetsSource, /targetType:\s*"scene_image"/);
+  assert.match(assetsSource, /targetType:\s*"shot_image"/);
 });
 
 test("production clip cards expose target-locked inline chat and character pickers", () => {
@@ -35,11 +37,11 @@ test("production clip cards expose target-locked inline chat and character picke
 });
 
 test("main Director scene approval cards expose inline edit chat and character selection beneath the image", () => {
-  assert.match(patchedAgent, /sceneApproval\?\.url[\s\S]{0,2200}DirectorCharacterPicker[\s\S]{0,1200}AssetEditChat[\s\S]{0,500}type:\s*"scene_image"/);
+  assert.match(patchedAgent, /sceneApproval\?\.url[\s\S]{0,4200}DirectorCharacterPicker[\s\S]{0,2200}AssetEditChat[\s\S]{0,900}type:\s*"scene_image"/);
 });
 
 test("main Director shot approval cards expose inline edit chat and character selection beneath the image", () => {
-  assert.match(patchedAgent, /shotApproval\?\.url[\s\S]{0,2600}DirectorCharacterPicker[\s\S]{0,1200}AssetEditChat[\s\S]{0,500}type:\s*"shot_image"/);
+  assert.match(patchedAgent, /shotApproval\?\.url[\s\S]{0,4800}DirectorCharacterPicker[\s\S]{0,2200}AssetEditChat[\s\S]{0,900}type:\s*"shot_image"/);
 });
 
 test("Director chat prepares regeneration and image edits without spending provider credits automatically", () => {
