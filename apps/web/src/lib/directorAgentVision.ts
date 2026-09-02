@@ -1,10 +1,20 @@
 import type { Clip } from "@mvs/shared";
 import { parseDirectorVision } from "./directorVisionParser.js";
 
+export const DIRECTOR_CLIP_COUNT_STORAGE_KEY = "mvs-director-clip-count";
+
 export type DirectorPlanningClip = Clip & { userDirection?: string };
 
 function shotId(index: number, start: number, end: number): string {
   return `vision-shot-${index + 1}-${Math.round(start * 10)}-${Math.round(end * 10)}`;
+}
+
+function persistedClipCount(): number | undefined {
+  if (typeof window === "undefined" || !window.localStorage) return undefined;
+  const raw = window.localStorage.getItem(DIRECTOR_CLIP_COUNT_STORAGE_KEY);
+  if (!raw) return undefined;
+  const value = Number(raw);
+  return Number.isFinite(value) ? value : undefined;
 }
 
 function clampClipCount(value: number | undefined, fallback: number): number {
@@ -74,7 +84,7 @@ function combinePlanningClips(clips: DirectorPlanningClip[], desiredCount: numbe
 
 function rebalancePlanningClips(clips: DirectorPlanningClip[], requestedClipCount?: number): DirectorPlanningClip[] {
   if (clips.length === 0) return [];
-  const desiredCount = clampClipCount(requestedClipCount, clips.length);
+  const desiredCount = clampClipCount(requestedClipCount ?? persistedClipCount(), clips.length);
   if (desiredCount === clips.length) return clips;
   if (desiredCount > clips.length) return splitPlanningClips(clips, desiredCount);
   return combinePlanningClips(clips, desiredCount);
