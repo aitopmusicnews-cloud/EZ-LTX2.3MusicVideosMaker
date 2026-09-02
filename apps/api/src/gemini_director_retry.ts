@@ -1,4 +1,4 @@
-export const GEMINI_DIRECTOR_FALLBACK_MODEL = "gemini-2.5-flash";
+export const GEMINI_DIRECTOR_FALLBACK_MODEL = "gemini-3.7-flash";
 
 function errorText(error: unknown): string {
   if (error instanceof Error) {

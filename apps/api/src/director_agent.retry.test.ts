@@ -1,7 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { isTransientGeminiFailure, runGeminiDirectorWithFallback } from "./gemini_director_retry.js";
+import {
+  GEMINI_DIRECTOR_FALLBACK_MODEL,
+  isTransientGeminiFailure,
+  runGeminiDirectorWithFallback,
+} from "./gemini_director_retry.js";
 
 test("Gemini Director recognizes provider capacity and transport failures as transient", () => {
   assert.equal(isTransientGeminiFailure(Object.assign(new Error("RESOURCE_EXHAUSTED"), { status: 429 })), true);
@@ -28,7 +32,10 @@ test("Gemini Director retries the primary model before falling back", async () =
   assert.deepEqual(calls, ["gemini-primary", "gemini-primary"]);
 });
 
-test("Gemini Director uses stable 2.5 Flash when the primary remains capacity-limited", async () => {
+test("Gemini Director uses supported 3.7 Flash when the primary remains capacity-limited", async () => {
+  assert.equal(GEMINI_DIRECTOR_FALLBACK_MODEL, "gemini-3.7-flash");
+  assert.notEqual(GEMINI_DIRECTOR_FALLBACK_MODEL, "gemini-2.5-flash");
+
   const calls: string[] = [];
   const result = await runGeminiDirectorWithFallback("gemini-primary", async (model) => {
     calls.push(model);
@@ -37,8 +44,8 @@ test("Gemini Director uses stable 2.5 Flash when the primary remains capacity-li
   }, { retriesPerModel: 2, baseDelayMs: 0 });
 
   assert.equal(result.value, "fallback plan");
-  assert.equal(result.model, "gemini-2.5-flash");
-  assert.deepEqual(calls, ["gemini-primary", "gemini-primary", "gemini-2.5-flash"]);
+  assert.equal(result.model, "gemini-3.7-flash");
+  assert.deepEqual(calls, ["gemini-primary", "gemini-primary", "gemini-3.7-flash"]);
 });
 
 test("non-transient Gemini errors do not fan out to fallback models", async () => {
