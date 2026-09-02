@@ -116,3 +116,18 @@ test("task polling keeps waiting states and returns completed HTTPS output", asy
   );
   assert.deepEqual(completed, { kind: "completed", url: "https://cdn.example.com/final.mp4" });
 });
+
+test("video status rate limits stay in progress and request a one-minute backoff", async () => {
+  const limited = await getAgnesResultOnce(
+    { videoId: "video-limited", taskId: "task-limited", model: "agnes-video-v2.0" },
+    "secret",
+    async () => jsonResponse({ detail: "video status query rate limit exceeded" }, 429),
+  );
+
+  assert.deepEqual(limited, {
+    kind: "waiting",
+    status: "rate_limited",
+    progress: 0,
+    retryAfterMs: 60_000,
+  });
+});

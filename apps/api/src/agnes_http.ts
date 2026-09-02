@@ -15,10 +15,30 @@ import {
 } from "./agnes_core.js";
 
 const REQUEST_TIMEOUT_MS = 120_000;
+const DEFAULT_RATE_LIMIT_BACKOFF_MS = 60_000;
 type FetchLike = typeof fetch;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+export class AgnesRateLimitError extends Error {
+  readonly retryAfterMs: number;
+
+  constructor(context: string, detail: string, retryAfterMs = DEFAULT_RATE_LIMIT_BACKOFF_MS) {
+    super(`Agnes ${context} request rate limited: ${detail}`);
+    this.name = "AgnesRateLimitError";
+    this.retryAfterMs = Math.max(DEFAULT_RATE_LIMIT_BACKOFF_MS, retryAfterMs);
+  }
+}
+
+function retryAfterMs(response: Response): number {
+  const raw = response.headers.get("retry-after")?.trim();
+  if (!raw) return DEFAULT_RATE_LIMIT_BACKOFF_MS;
+  const seconds = Number(raw);
+  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
+  const when = Date.parse(raw);
+  return Number.isFinite(when) ? Math.max(0, when - Date.now()) : DEFAULT_RATE_LIMIT_BACKOFF_MS;
 }
 
 async function readJson(response: Response, context: string): Promise<Record<string, unknown>> {
@@ -35,6 +55,9 @@ async function readJson(response: Response, context: string): Promise<Record<str
       : isRecord(payload.error) && typeof payload.error.message === "string"
         ? payload.error.message
         : `status ${response.status}`;
+    if (response.status === 429) {
+      throw new AgnesRateLimitError(context, detail, retryAfterMs(response));
+    }
     throw new Error(`Agnes ${context} request failed: ${detail}`);
   }
   return payload;
@@ -138,7 +161,12 @@ export async function createAgnesReferenceVideo(
 }
 
 export type AgnesResult =
-  | { kind: "waiting"; status: "pending" | "queued" | "in_progress"; progress: number }
+  | {
+      kind: "waiting";
+      status: "pending" | "queued" | "in_progress" | "rate_limited";
+      progress: number;
+      retryAfterMs?: number;
+    }
   | { kind: "completed"; url: string };
 
 export async function getAgnesResultOnce(
@@ -152,7 +180,20 @@ export async function getAgnesResultOnce(
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     cache: "no-store",
   });
-  const payload = await readJson(response, "video-status");
+  let payload: Record<string, unknown>;
+  try {
+    payload = await readJson(response, "video-status");
+  } catch (error) {
+    if (error instanceof AgnesRateLimitError) {
+      return {
+        kind: "waiting",
+        status: "rate_limited",
+        progress: 0,
+        retryAfterMs: error.retryAfterMs,
+      };
+    }
+    throw error;
+  }
   const status = typeof payload.status === "string" ? payload.status.toLowerCase() : "";
   if (status === "pending" || status === "queued" || status === "in_progress") {
     const progress = typeof payload.progress === "number" ? payload.progress : 0;
@@ -180,5 +221,5 @@ export async function getAgnesResultOnce(
     const legacyUrl = completedAgnesUrl(await readJson(legacyResponse, "legacy-video-result"));
     if (legacyUrl) return { kind: "completed", url: legacyUrl };
   }
-  throw new Error("Agnes completed without returning a valid HTTPS metadata.url.");
+  throw new Error("Agnes completed without returning a valid HTTPS video URL.");
 }
