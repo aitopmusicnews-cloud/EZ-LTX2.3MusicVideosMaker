@@ -2,7 +2,7 @@ name: Build Check
 
 on:
   push:
-    branches: [main, backup-pre-rollback-1890d80, feature/director-vision-first-clips, fix/director-no-silent-fallback]
+    branches: [main, backup-pre-rollback-1890d80, feature/director-vision-first-clips, fix/director-no-silent-fallback, feature/director-editable-clip-count]
   pull_request:
     branches: [main, backup-pre-rollback-1890d80]
 
@@ -21,6 +21,6 @@ jobs:
       - name: Install dependencies
         run: npm ci
       - name: Director vision-first regression tests
-        run: npx tsx --test apps/web/src/lib/directorVisionParser.test.ts apps/web/src/lib/directorPlan.test.ts apps/web/src/lib/directorGeneration.test.ts apps/web/src/components/AutoDirector.vision-first.test.ts apps/web/src/components/LtxDirectorAgent.vision-first.test.ts
+        run: npx tsx --test apps/web/src/lib/directorVisionParser.test.ts apps/web/src/lib/directorAgentVision.test.ts apps/web/src/lib/directorPlan.test.ts apps/web/src/lib/directorGeneration.test.ts apps/web/src/components/AutoDirector.vision-first.test.ts apps/web/src/components/LtxDirectorAgent.vision-first.test.ts
       - name: Build workspaces
         run: npm run build
