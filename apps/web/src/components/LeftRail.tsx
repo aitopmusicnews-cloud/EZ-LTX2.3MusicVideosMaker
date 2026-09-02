@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useStore } from "../lib/store.js";
 import { saveImageToLibrary } from "../lib/api.js";
 import { downloadFromUrl } from "../lib/download.js";
+import { DIRECTOR_CLIP_COUNT_STORAGE_KEY } from "../lib/directorAgentVision.js";
 import { AssetUploader } from "./AssetUploader.js";
 import { EasyWayPromptAssistant } from "./EasyWayPromptAssistant.js";
 
@@ -16,6 +17,23 @@ export function LeftRail() {
 
   const [uploadStatus, setUploadStatus] = useState<string | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [directorClipCount, setDirectorClipCount] = useState(() => {
+    if (typeof window === "undefined") return "";
+    return window.localStorage.getItem(DIRECTOR_CLIP_COUNT_STORAGE_KEY) ?? "";
+  });
+
+  const changeDirectorClipCount = (value: string) => {
+    if (!value.trim()) {
+      setDirectorClipCount("");
+      window.localStorage.removeItem(DIRECTOR_CLIP_COUNT_STORAGE_KEY);
+      return;
+    }
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return;
+    const normalized = String(Math.max(1, Math.min(80, Math.round(parsed))));
+    setDirectorClipCount(normalized);
+    window.localStorage.setItem(DIRECTOR_CLIP_COUNT_STORAGE_KEY, normalized);
+  };
 
   const addReference = (url: string) => {
     addLookbook(url);
@@ -62,6 +80,36 @@ export function LeftRail() {
           <b>›</b>
         </button>
       </div>
+
+      {analysis && (
+        <div className="section">
+          <div className="section-header">
+            <span className="label">Tools</span>
+          </div>
+          <label className="rail-help" style={{ display: "grid", gap: 6, marginBottom: 10 }}>
+            <span>Director clip amount</span>
+            <input
+              type="number"
+              min={1}
+              max={80}
+              step={1}
+              value={directorClipCount}
+              placeholder="Auto"
+              onChange={(event) => changeDirectorClipCount(event.target.value)}
+              aria-label="Director clip amount"
+              style={{ width: "100%", minHeight: 36, padding: "7px 9px", borderRadius: 7, border: "1px solid rgba(255,255,255,.14)", background: "rgba(255,255,255,.05)", color: "inherit" }}
+            />
+            <span>Auto follows your timecoded Vision. Enter 1–80 to split or combine production clips.</span>
+          </label>
+          <div style={{ display: "grid", gap: 8 }}>
+            <button type="button" className="btn ghost w-full" onClick={() => window.dispatchEvent(new CustomEvent("mvs-open-ltx-director"))}>✦ Director</button>
+            <button type="button" className="btn ghost w-full" onClick={() => window.dispatchEvent(new CustomEvent("mvs-open-reference-chat"))}>＋ References</button>
+            <button type="button" className="btn ghost w-full" onClick={() => window.dispatchEvent(new CustomEvent("mvs-open-promo-cut"))}>✂ Promo Cut</button>
+          </div>
+          <div className="rail-help">Open creative tools here without covering the timeline.</div>
+        </div>
+      )}
+
       <div className="section">
         <div className="section-header">
           <span className="label">Reference images</span>
