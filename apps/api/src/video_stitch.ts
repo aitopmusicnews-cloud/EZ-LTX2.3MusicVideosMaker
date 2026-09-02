@@ -11,13 +11,10 @@ function safeProjectToken(value: string): string {
 }
 
 /** Stitch silent/generated video segments into one logical Director section. */
-export async function stitchVideoSegments(
-  projectId: string,
-  videos: string[],
-  options?: { aspectRatio?: string; targetDuration?: number; fps?: number },
-): Promise<{ url: string }> {
+export async function stitchVideoSegments(projectId: string, videos: string[]): Promise<{ url: string }> {
   if (!videos.length) throw new Error("At least one video segment is required to stitch a section.");
   if (videos.length === 1) return { url: videos[0]! };
+  if (videos.length > 40) throw new Error("A Director section cannot contain more than 40 internal generation segments.");
 
   const resolved = videos.map((videoUrl) => ({
     videoUrl,
@@ -34,24 +31,15 @@ export async function stitchVideoSegments(
   const inputs: string[] = [];
   const filters: string[] = [];
   const concatInputs: string[] = [];
-  const aspectRatio = options?.aspectRatio ?? "16:9";
-  const { width, height } = aspectRatio === "9:16"
-    ? { width: 720, height: 1280 }
-    : aspectRatio === "1:1"
-      ? { width: 720, height: 720 }
-      : aspectRatio === "4:3"
-        ? { width: 960, height: 720 }
-        : { width: 1280, height: 720 };
-  const fps = options?.fps ?? 30;
 
   resolved.forEach((item, index) => {
     inputs.push("-i", item.resolvedPath);
-    filters.push(`[${index}:v]scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,fps=${fps},format=yuv420p,setpts=PTS-STARTPTS[s${index}]`);
+    filters.push(`[${index}:v]scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,fps=30,format=yuv420p,setpts=PTS-STARTPTS[s${index}]`);
     concatInputs.push(`[s${index}]`);
   });
   filters.push(`${concatInputs.join("")}concat=n=${resolved.length}:v=1:a=0[outv]`);
 
-  const outputArgs = [
+  await runFfmpeg([
     ...inputs,
     "-filter_complex", filters.join(";"),
     "-map", "[outv]",
@@ -60,16 +48,9 @@ export async function stitchVideoSegments(
     "-crf", "20",
     "-pix_fmt", "yuv420p",
     "-movflags", "+faststart",
-  ];
-  if (options?.targetDuration != null) {
-    if (!Number.isFinite(options.targetDuration) || options.targetDuration <= 0) {
-      throw new Error("stitched generated video duration must be positive");
-    }
-    outputArgs.push("-t", options.targetDuration.toFixed(6));
-  }
-  outputArgs.push("-y", outputPath);
-
-  await runFfmpeg(outputArgs);
+    "-y",
+    outputPath,
+  ]);
 
   const { publicUrl } = await storage.saveRender(outputPath, outputName, "video/mp4");
   if (config.STORAGE_BACKEND === "s3") await unlink(outputPath).catch(() => {});

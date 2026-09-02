@@ -1,17 +1,17 @@
 export function patchLeftRailTools(source, replaceRequired) {
-  if (source.includes('mvs-open-video-director') && source.includes('mvs-open-promo-cut')) return source;
+  if (source.includes('mvs-open-ltx-director') && source.includes('mvs-open-promo-cut')) return source;
 
   const referenceSection = `      <div className="section">\n        <div className="section-header">\n          <span className="label">Reference images</span>`;
-  const toolsSection = `      {analysis && (\n        <div className="section">\n          <div className="section-header">\n            <span className="label">Tools</span>\n          </div>\n          <div style={{ display: "grid", gap: 8 }}>\n            <button type="button" className="btn ghost w-full" onClick={() => window.dispatchEvent(new CustomEvent("mvs-open-video-director"))}>✦ Director</button>\n            <button type="button" className="btn ghost w-full" onClick={() => window.dispatchEvent(new CustomEvent("mvs-open-reference-chat"))}>＋ References</button>\n            <button type="button" className="btn ghost w-full" onClick={() => window.dispatchEvent(new CustomEvent("mvs-open-promo-cut"))}>✂ Promo Cut</button>\n          </div>\n          <div className="rail-help">Open creative tools here without covering the timeline.</div>\n        </div>\n      )}\n\n${referenceSection}`;
+  const toolsSection = `      {analysis && (\n        <div className="section">\n          <div className="section-header">\n            <span className="label">Tools</span>\n          </div>\n          <div style={{ display: "grid", gap: 8 }}>\n            <button type="button" className="btn ghost w-full" onClick={() => window.dispatchEvent(new CustomEvent("mvs-open-ltx-director"))}>✦ Director</button>\n            <button type="button" className="btn ghost w-full" onClick={() => window.dispatchEvent(new CustomEvent("mvs-open-reference-chat"))}>＋ References</button>\n            <button type="button" className="btn ghost w-full" onClick={() => window.dispatchEvent(new CustomEvent("mvs-open-promo-cut"))}>✂ Promo Cut</button>\n          </div>\n          <div className="rail-help">Open creative tools here without covering the timeline.</div>\n        </div>\n      )}\n\n${referenceSection}`;
 
   return replaceRequired(source, referenceSection, toolsSection, "left-rail Director tools");
 }
 
 export function patchDirectorLeftRailLauncher(source, replaceRequired) {
   let patched = source;
-  if (!patched.includes('mvs-open-video-director')) {
+  if (!patched.includes('mvs-open-ltx-director')) {
     const effectAnchor = `  useEffect(() => { const onReference = (event: Event) => { const detail = (event as CustomEvent<DirectorReferenceDetail>).detail; if (detail?.kind === "character" && detail.url) setCharacter(detail.url); setReferenceRevision((value) => value + 1); setOpen(true); }; window.addEventListener(REFERENCE_EVENT, onReference as EventListener); return () => window.removeEventListener(REFERENCE_EVENT, onReference as EventListener); }, [setCharacter]);`;
-    const effectWithLauncher = `${effectAnchor}\n  useEffect(() => { const openDirector = () => setOpen(true); window.addEventListener("mvs-open-video-director", openDirector); return () => window.removeEventListener("mvs-open-video-director", openDirector); }, []);`;
+    const effectWithLauncher = `${effectAnchor}\n  useEffect(() => { const openDirector = () => setOpen(true); window.addEventListener("mvs-open-ltx-director", openDirector); return () => window.removeEventListener("mvs-open-ltx-director", openDirector); }, []);`;
     patched = replaceRequired(patched, effectAnchor, effectWithLauncher, "left-rail Director open event");
   }
 

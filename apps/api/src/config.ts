@@ -12,17 +12,13 @@ const optionalNonEmpty = z
 
 const Env = z.object({
   LOCAL_INFERENCE_URL: optionalUrl.optional(),
-  MODAL_AUDIO_URL: optionalUrl.optional(),
-  MODAL_MEDIA_SUITE_URL: optionalUrl.optional(),
-  MODAL_FILE_RESOLVER_URL: optionalUrl.optional(),
-  MODAL_KEY: optionalNonEmpty.optional(),
-  MODAL_SECRET: optionalNonEmpty.optional(),
-  GEMINI_API_KEY: optionalNonEmpty.optional(),
   AGNES_API_KEY: optionalNonEmpty.optional(),
+  GEMINI_API_KEY: optionalNonEmpty.optional(),
   GEMINI_DIRECTOR_MODEL: z.string().trim().min(1).default("gemini-3.6-flash"),
   API_AUTH_TOKEN: optionalNonEmpty.optional(),
   PORT: z.coerce.number().default(3001),
   PUBLIC_BASE_URL: optionalUrl.optional(),
+  RENDER_EXTERNAL_URL: optionalUrl.optional(),
   WEB_ORIGIN: z.string().default(""),
   STORAGE_DIR: z.string().default("apps/api/storage"),
   STORAGE_BACKEND: z.enum(["local", "s3"]).default("local"),
@@ -76,16 +72,10 @@ export const config = {
 };
 
 if (!config.AGNES_API_KEY) {
-  console.log("INFO: AGNES_API_KEY is missing. Agnes video generation is offline.");
-}
-if (!config.MODAL_AUDIO_URL) {
-  console.log("INFO: MODAL_AUDIO_URL is missing. Music analysis is offline.");
-}
-if (!config.MODAL_MEDIA_SUITE_URL) {
-  console.log("INFO: MODAL_MEDIA_SUITE_URL is missing. Character creation is offline.");
+  console.log("INFO: AGNES_API_KEY is missing. Agnes media generation is offline.");
 }
 if (!config.GEMINI_API_KEY) {
-  console.log("INFO: GEMINI_API_KEY is missing. The Director Agent is offline and will not use a fallback planner.");
+  console.log("INFO: GEMINI_API_KEY is missing. The Agnes Director Agent is offline and will not use a fallback planner.");
 }
 
 export type Config = typeof config;

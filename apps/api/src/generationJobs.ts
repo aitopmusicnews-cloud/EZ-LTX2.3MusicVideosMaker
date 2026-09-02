@@ -1,21 +1,17 @@
-export type GenerationTaskSource = "modal" | "agnes";
-
 export interface JobRecord {
   status: "pending" | "running" | "completed" | "failed";
   video_url?: string;
   image_url?: string;
   error?: string;
   prompt: string;
+  progress?: number;
   createdAt: number;
   updatedAt: number;
-  provider?: GenerationTaskSource;
-  modalCallId?: string;
   providerState?: unknown;
 }
 
-export type GenerationTask = { id: string };
-export type ModalTask = GenerationTask;
-export type TaskIdPayload = { source: GenerationTaskSource; id: string };
+export type GenerationTask = { id: string; imageUrl?: string };
+export type TaskIdPayload = { source: "agnes"; id: string };
 
 function jobKey(jobId: string): string {
   return `jobs/${jobId}.json`;
@@ -43,14 +39,9 @@ export function encodeTaskId(payload: TaskIdPayload): string {
 export function decodeTaskId(encoded: string): TaskIdPayload {
   try {
     const parsed = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8"));
-    if (
-      (parsed?.source === "modal" || parsed?.source === "agnes") &&
-      typeof parsed.id === "string"
-    ) {
-      return parsed as TaskIdPayload;
-    }
+    if (parsed?.source === "agnes" && typeof parsed.id === "string") return parsed as TaskIdPayload;
   } catch {
-    // Backward compatibility for old projects with an unencoded Modal job id.
+    // Old unencoded job ids remain readable as local job keys.
   }
-  return { source: "modal", id: encoded };
+  return { source: "agnes", id: encoded };
 }

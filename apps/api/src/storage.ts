@@ -71,8 +71,6 @@ export interface StorageBackend {
   listFiles(prefix: string): Promise<FileEntry[]>;
   /** Refresh an owned media URL so private S3 objects remain browser-playable. */
   playableUrl(rawUrl: string): Promise<string>;
-  /** Return a short-lived HTTPS URL suitable for a server-side external provider. */
-  providerUrl(rawUrl: string, expiresInSeconds?: number): Promise<string>;
 }
 
 class LocalBackend implements StorageBackend {
@@ -154,21 +152,6 @@ class LocalBackend implements StorageBackend {
   async playableUrl(rawUrl: string): Promise<string> {
     return rawUrl;
   }
-
-  async providerUrl(rawUrl: string): Promise<string> {
-    let resolved = rawUrl;
-    if (rawUrl.startsWith("/")) {
-      if (!config.PUBLIC_BASE_URL) {
-        throw new Error("PUBLIC_BASE_URL is required to expose local media to Agnes.");
-      }
-      resolved = new URL(rawUrl, `${config.PUBLIC_BASE_URL.replace(/\/$/, "")}/`).toString();
-    }
-    const parsed = new URL(resolved);
-    if (parsed.protocol !== "https:") {
-      throw new Error("Agnes image inputs require an HTTPS-accessible media URL.");
-    }
-    return parsed.toString();
-  }
 }
 
 async function walkDir(dir: string, visit: (filePath: string) => Promise<void>): Promise<void> {
@@ -212,10 +195,10 @@ class S3Backend implements StorageBackend {
   }
 
   private async url(key: string): Promise<string> {
-    return this.signGetUrl(key, PRESIGNED_URL_TTL_SECONDS);
+    return this.signGetUrl(key);
   }
 
-  private signGetUrl(key: string, expiresInSeconds: number): string {
+  private signGetUrl(key: string): string {
     const accessKeyId = config.AWS_ACCESS_KEY_ID!;
     const secretAccessKey = config.AWS_SECRET_ACCESS_KEY!;
     const sessionToken = config.AWS_SESSION_TOKEN;
@@ -229,7 +212,7 @@ class S3Backend implements StorageBackend {
       ["X-Amz-Algorithm", "AWS4-HMAC-SHA256"],
       ["X-Amz-Credential", `${accessKeyId}/${credentialScope}`],
       ["X-Amz-Date", amzDate],
-      ["X-Amz-Expires", String(expiresInSeconds)],
+      ["X-Amz-Expires", String(PRESIGNED_URL_TTL_SECONDS)],
       ["X-Amz-SignedHeaders", "host"],
     ];
     if (sessionToken) params.push(["X-Amz-Security-Token", sessionToken]);
@@ -313,16 +296,6 @@ class S3Backend implements StorageBackend {
   async playableUrl(rawUrl: string): Promise<string> {
     const key = this.keyFromUrl(rawUrl);
     return key ? this.url(key) : rawUrl;
-  }
-
-  async providerUrl(rawUrl: string, expiresInSeconds = 900): Promise<string> {
-    const key = this.keyFromUrl(rawUrl);
-    if (key) return this.signGetUrl(key, expiresInSeconds);
-    const parsed = new URL(rawUrl);
-    if (parsed.protocol !== "https:") {
-      throw new Error("Agnes image inputs require an HTTPS-accessible media URL.");
-    }
-    return parsed.toString();
   }
 
   async saveUpload(buf: Buffer, originalName: string, contentType?: string) {
@@ -456,11 +429,6 @@ export async function saveUpload(buf: Buffer, originalName: string, contentType?
 /** Return a fresh browser-playable URL for local or private-S3 media. */
 export async function playableUrl(rawUrl: string): Promise<string> {
   return storage.playableUrl(rawUrl);
-}
-
-/** Return a short-lived HTTPS URL for server-to-provider media handoff. */
-export async function providerUrl(rawUrl: string, expiresInSeconds = 900): Promise<string> {
-  return storage.providerUrl(rawUrl, expiresInSeconds);
 }
 
 // --- Analysis cache ------------------------------------------------------

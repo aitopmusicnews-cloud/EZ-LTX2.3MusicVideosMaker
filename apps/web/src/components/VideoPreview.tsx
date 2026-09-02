@@ -80,7 +80,7 @@ export function VideoPreview() {
         }
       })
       .catch(() => {
-        // Preview can still use temporary Modal URLs when the library is offline.
+        // Preview can still use temporary Agnes URLs when the library is offline.
       });
 
     return () => {
@@ -137,7 +137,7 @@ export function VideoPreview() {
     if (loadedRef.current[frontSlot] === activeKey) {
       const front = slotEl(frontSlot);
       if (front) {
-        applyPlaybackRate(front, slotDur, active.source, active.model);
+        applyPlaybackRate(front, slotDur, active.source);
         seekTo(front, active, playhead);
         repaintIfStale(front, isPlaying);
       }
@@ -146,7 +146,7 @@ export function VideoPreview() {
       const newFront = slotEl(back);
       oldFront?.pause();
       if (newFront) {
-        applyPlaybackRate(newFront, slotDur, active.source, active.model);
+        applyPlaybackRate(newFront, slotDur, active.source);
         seekTo(newFront, active, playhead);
         repaintIfStale(newFront, isPlaying);
       }
@@ -155,7 +155,7 @@ export function VideoPreview() {
       loadInto(frontSlot, active);
       const front = slotEl(frontSlot);
       if (front) {
-        const onMeta = () => applyPlaybackRate(front, slotDur, active.source, active.model);
+        const onMeta = () => applyPlaybackRate(front, slotDur, active.source);
         if (front.readyState >= 1) onMeta();
         else {
           front.addEventListener("loadedmetadata", onMeta);
@@ -240,10 +240,10 @@ export function VideoPreview() {
         <div className="preview-empty preview-empty-overlay" style={{ background: "rgba(9, 10, 15, 0.85)", backdropFilter: "blur(4px)", zIndex: 5 }}>
           <div className="h-8 w-8 border-4 border-indigo-500/20 border-t-indigo-500 rounded-full animate-spin mb-3" />
           <div className="label-big" style={{ fontSize: "1.1rem", textTransform: "none", color: "#f4f4f5" }}>
-            {playheadClip.status === "queued" ? "Queued in workspace..." : "Generating Agnes video..."}
+            {playheadClip.status === "queued" ? "Queued in workspace..." : "Generating Video & Foley..."}
           </div>
           <div style={{ marginTop: "4px", color: "#a1a1aa", fontSize: "0.8rem" }}>
-            Agnes Video V2.0 is generating this timeline-timed visual...
+            Agnes-Audio pipeline running on Agnes API...
           </div>
         </div>
       )}
@@ -252,7 +252,7 @@ export function VideoPreview() {
         <div className="preview-empty preview-empty-overlay" style={{ background: "rgba(9, 10, 15, 0.9)", zIndex: 5 }}>
           <div className="label-big" style={{ color: "#f87171", fontSize: "1.2rem" }}>Generation Failed</div>
           <div style={{ marginTop: "6px", color: "#d4d4d8", maxWidth: "80%", textAlign: "center", fontSize: "0.85rem" }}>
-            {playheadClip.lastError || "Unknown video generation error."}
+            {playheadClip.lastError || "Unknown GPU cluster error."}
           </div>
         </div>
       )}
@@ -300,8 +300,8 @@ function repaintIfStale(el: HTMLVideoElement, isPlaying: boolean): void {
   }
 }
 
-function applyPlaybackRate(el: HTMLVideoElement, slotDur: number, source?: string, model?: string): void {
-  if (source === "lipSync" || model === "agnes-video-v2.0") {
+function applyPlaybackRate(el: HTMLVideoElement, slotDur: number, source?: string): void {
+  if (source === "lipSync") {
     if (el.playbackRate !== 1) el.playbackRate = 1;
     return;
   }

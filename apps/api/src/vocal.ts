@@ -1,37 +1,37 @@
-import { config } from "./config.js";
-import { encodeTaskId, type ModalTask } from "./generationJobs.js";
+import { analyzeFromUrl } from "./audio.js";
+import { encodeTaskId, writeJobToDisk, type GenerationTask } from "./generationJobs.js";
 
-interface ModalAudioResponse {
-  duration: number;
-  bpm: number;
-  key: string;
-  beats: number[];
-  downbeats: number[];
-  onsets: number[];
-  rms_curve: number[];
-  sections: Array<{ start: number; end: number; label: string }>;
-}
-
-/**
- * Core Vocal Track Analyzer connecting directly to Modal cloud workspace
- */
-export async function analyzeVocalTrack(audioUrl: string): Promise<ModalTask> {
-  const jobId = `audio_${Date.now()}`;
-  
-  const response = await fetch(config.MODAL_AUDIO_URL || 'https://modal.run', {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ url: audioUrl, job_id: jobId })
+/** Preserve the existing vocal-analysis endpoint while running analysis locally. */
+export async function analyzeVocalTrack(audioUrl: string): Promise<GenerationTask> {
+  const jobId = `audio_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const now = Date.now();
+  await writeJobToDisk(jobId, {
+    status: "running",
+    prompt: "Local vocal analysis",
+    progress: 0,
+    createdAt: now,
+    updatedAt: now,
   });
-
-  if (!response.ok) {
-    throw new Error(`Modal audio analyzer rejected track payload: ${response.statusText}`);
+  try {
+    await analyzeFromUrl(jobId, audioUrl);
+    await writeJobToDisk(jobId, {
+      status: "completed",
+      prompt: "Local vocal analysis",
+      progress: 100,
+      createdAt: now,
+      updatedAt: Date.now(),
+    });
+    return { id: encodeTaskId({ source: "agnes", id: jobId }) };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await writeJobToDisk(jobId, {
+      status: "failed",
+      prompt: "Local vocal analysis",
+      progress: 100,
+      error: message,
+      createdAt: now,
+      updatedAt: Date.now(),
+    });
+    throw error;
   }
-
-  // FIXED: Cast explicitly to the type-safe contract to clear strict compiler flags
-  const result = (await response.json()) as ModalAudioResponse;
-
-  console.log(`[Audio Pipeline Success] Analyzed ${result.duration}s track. Key: ${result.key}, BPM: ${result.bpm}`);
-
-  return { id: encodeTaskId({ source: "modal", id: jobId }) };
 }

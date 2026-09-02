@@ -38,13 +38,13 @@ export function LeftRail() {
     <aside className="left">
       <div className="section">
         <div className="section-header">
-          <span className="label">Agnes Video V2.0</span>
+          <span className="label">Agnes deployment</span>
         </div>
         <div className="context-card">
-          <div className="row"><span>Provider</span><span>Agnes Video V2.0</span></div>
-          <div className="row"><span>Frame rate</span><span>24 FPS</span></div>
-          <div className="row"><span>Clip length</span><span>Timeline driven</span></div>
-          <div className="row"><span>Final audio</span><span>Original song</span></div>
+          <div className="row"><span>Pipeline</span><span>Agnes API</span></div>
+          <div className="row"><span>Video</span><span>Up to 1152×768 · 24 FPS</span></div>
+          <div className="row"><span>Clip length</span><span>1–5 seconds</span></div>
+          <div className="row"><span>Audio</span><span>Song-reference guided</span></div>
         </div>
       </div>
 
@@ -62,27 +62,13 @@ export function LeftRail() {
           <b>›</b>
         </button>
       </div>
-      {analysis && (
-        <div className="section">
-          <div className="section-header">
-            <span className="label">Tools</span>
-          </div>
-          <div style={{ display: "grid", gap: 8 }}>
-            <button type="button" className="btn ghost w-full" onClick={() => window.dispatchEvent(new CustomEvent("mvs-open-video-director"))}>✦ Director</button>
-            <button type="button" className="btn ghost w-full" onClick={() => window.dispatchEvent(new CustomEvent("mvs-open-reference-chat"))}>＋ References</button>
-            <button type="button" className="btn ghost w-full" onClick={() => window.dispatchEvent(new CustomEvent("mvs-open-promo-cut"))}>✂ Promo Cut</button>
-          </div>
-          <div className="rail-help">Open creative tools here without covering the timeline.</div>
-        </div>
-      )}
-
       <div className="section">
         <div className="section-header">
           <span className="label">Reference images</span>
           <span className="dim" style={{ fontSize: 11 }}>{lookbook.length}/{LOOKBOOK_MAX}</span>
         </div>
         <div className="rail-help">
-          These images can condition Agnes Video V2.0 image-to-video generations.
+          These images are used only for Agnes image-to-video generations.
         </div>
         <div className="lookbook">
           {lookbook.map((url) => (

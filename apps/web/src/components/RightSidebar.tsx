@@ -4,29 +4,29 @@ import { Sidebar } from "./Sidebar.js";
 import { SidebarEmpty } from "./SidebarEmpty.js";
 import { Library } from "./Library.js";
 
-type Tab = "video" | "library";
+type Tab = "ltx" | "library";
 
 export function RightSidebar() {
   const selectedId = useStore((s) => s.selectedClipId);
   const clips = useStore((s) => s.clips);
   const selectedClip = clips.find((clip) => clip.id === selectedId);
-  const [tab, setTab] = useState<Tab>("video");
+  const [tab, setTab] = useState<Tab>("ltx");
 
   useEffect(() => {
-    if (selectedId) setTab("video");
+    if (selectedId) setTab("ltx");
   }, [selectedId]);
 
-  const isEmpty = tab === "video" && !selectedClip;
+  const isEmpty = tab === "ltx" && !selectedClip;
 
   return (
     <aside className={`right${isEmpty ? " empty" : ""}`}>
       <div className="sidebar-tabs">
         <button
           type="button"
-          className={`sidebar-tab${tab === "video" ? " active" : ""}`}
-          onClick={() => setTab("video")}
+          className={`sidebar-tab${tab === "ltx" ? " active" : ""}`}
+          onClick={() => setTab("ltx")}
         >
-          Agnes Video
+          Agnes
         </button>
         <button
           type="button"

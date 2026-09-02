@@ -1,21 +1,23 @@
 import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
-import type { AudioAnalysis, Clip } from "@mvs/shared";
+import type { AudioAnalysis, Clip, Task } from "@mvs/shared";
 import { useStore } from "../lib/store.js";
 import {
   pollTask,
   renderTimeline,
+  saveClipToServer,
   saveImageToLibrary,
   saveProjectToServer,
+  startLipSync,
   startTextToImage,
 } from "../lib/api.js";
 import { enqueueGeneration } from "../lib/scheduler.js";
 import { toast } from "../lib/toast.js";
-import { SocialExportPanel } from "./SocialExportPanel.js";
 
 const DIRECTOR_VERSION = 2;
 const MAX_STORYBOARD_FRAMES = 12;
+const MAX_LIPSYNC_SHOTS = 4;
 
-type DirectorStage = "vision" | "treatment" | "character" | "storyboard" | "production" | "final";
+type DirectorStage = "vision" | "treatment" | "character" | "storyboard" | "production" | "lipsync" | "final";
 
 type Treatment = {
   title: string;
@@ -51,6 +53,9 @@ type DirectorSession = {
   characterApproved: boolean;
   shots: StoryboardShot[];
   productionStarted: boolean;
+  lipSyncEnabled: boolean;
+  lipSyncStarted: boolean;
+  lipSyncedClipIds: string[];
   renderUrl?: string;
 };
 
@@ -60,6 +65,7 @@ const STAGES: Array<{ id: DirectorStage; label: string }> = [
   { id: "character", label: "Character" },
   { id: "storyboard", label: "Storyboard" },
   { id: "production", label: "Production" },
+  { id: "lipsync", label: "Lip sync" },
   { id: "final", label: "Final cut" },
 ];
 
@@ -233,6 +239,9 @@ function buildSession(songId: string): DirectorSession {
     treatmentApproved: false,
     characterApproved: false,
     productionStarted: false,
+    lipSyncEnabled: true,
+    lipSyncStarted: false,
+    lipSyncedClipIds: [],
     treatment: {
       title: "",
       logline: "",
@@ -243,6 +252,12 @@ function buildSession(songId: string): DirectorSession {
     characterPrompt: "",
     shots: [],
   };
+}
+
+function taskOutputUrl(task: Task): string | undefined {
+  if (task.outputUrl) return task.outputUrl;
+  if (Array.isArray(task.output)) return task.output[0];
+  return task.output?.videoUrl ?? task.output?.imageUrl ?? task.output?.url;
 }
 
 function activeStageIndex(stage: DirectorStage): number {
@@ -270,41 +285,6 @@ export function AutoDirector() {
   const [directorError, setDirectorError] = useState<string | null>(null);
 
   useEffect(() => {
-    const receiveReference = (event: Event) => {
-      const detail = (event as CustomEvent<{
-        kind?: "character" | "style" | "location" | "shot" | "note";
-        media?: "image" | "video" | "note";
-        name?: string;
-        url?: string;
-        sourceUrl?: string;
-        note?: string;
-      }>).detail;
-      if (!detail) return;
-      const kind = detail.kind ?? "style";
-      const note = String(detail.note ?? "").trim();
-      const name = String(detail.name ?? "reference").trim();
-      const anchorUrl = detail.url;
-      if (anchorUrl) addLookbook(anchorUrl);
-      if (kind === "character" && anchorUrl) setCharacter(anchorUrl);
-      setSession((current) => {
-        if (!current) return current;
-        if (kind === "note") {
-          const vision = note ? [current.vision.trim(), note].filter(Boolean).join("\n") : current.vision;
-          return { ...current, vision };
-        }
-        const description = note || name;
-        const referenceLine = description ? kind + " reference: " + description : kind + " visual reference supplied";
-        const mustInclude = [current.mustInclude.trim(), referenceLine].filter(Boolean).join("\n");
-        return { ...current, mustInclude, characterUrl: kind === "character" && anchorUrl ? anchorUrl : current.characterUrl, characterApproved: kind === "character" && anchorUrl ? false : current.characterApproved };
-      });
-      setDirectorError(null);
-      setOpen(true);
-    };
-    window.addEventListener("mvs-director-reference", receiveReference as EventListener);
-    return () => window.removeEventListener("mvs-director-reference", receiveReference as EventListener);
-  }, [addLookbook, setCharacter]);
-
-  useEffect(() => {
     if (!songId || !analysis || clips.length === 0) {
       setSession(null);
       setOpen(false);
@@ -317,7 +297,6 @@ export function AutoDirector() {
       if (raw) {
         const parsed = JSON.parse(raw) as DirectorSession;
         if (parsed.version === DIRECTOR_VERSION && parsed.songId === songId) {
-          if ((parsed as DirectorSession & { stage: string }).stage === "lipsync") parsed.stage = "final";
           setSession(parsed);
           return;
         }
@@ -339,8 +318,8 @@ export function AutoDirector() {
     if (!session || session.stage !== "production" || !session.productionStarted || clips.length === 0) return;
     const allReady = clips.every((clip) => clip.status === "ready" && clip.videoUrl);
     if (allReady) {
-      setProductionNote("All Agnes production clips are ready for Final Cut approval.");
-      setSession((current) => current ? { ...current, stage: "final" } : current);
+      setProductionNote("All production clips are ready for performance sync approval.");
+      setSession((current) => current ? { ...current, stage: "lipsync" } : current);
       setOpen(true);
     }
   }, [clips, session?.stage, session?.productionStarted]);
@@ -351,7 +330,11 @@ export function AutoDirector() {
     active: clips.filter((clip) => clip.status === "queued" || clip.status === "generating").length,
   }), [clips]);
 
-
+  const performanceClipIds = useMemo(() => {
+    const preferred = clips.filter((clip) => /verse|chorus|hook|bridge|vocal/i.test(clip.sectionLabel || ""));
+    const pool = preferred.length ? preferred : clips;
+    return pool.slice(0, MAX_LIPSYNC_SHOTS).map((clip) => clip.id);
+  }, [clips]);
 
   if (!songId || !analysis || !session) return null;
 
@@ -391,6 +374,8 @@ export function AutoDirector() {
       characterApproved: false,
       characterUrl: undefined,
       productionStarted: false,
+      lipSyncStarted: false,
+      lipSyncedClipIds: [],
       renderUrl: undefined,
     });
   };
@@ -400,18 +385,13 @@ export function AutoDirector() {
     for (let attempt = 1; attempt <= 2; attempt += 1) {
       try {
         setBusy(attempt === 1 ? label : "Image service is waking up. Retrying…");
-        const { id } = await startTextToImage({
+        const result = await startTextToImage({
           promptText: prompt,
           ratio: "16:9",
           model: "sdxl",
-        });
-        const task = await pollTask(id);
-        const imageUrl = task.outputUrl
-          || (typeof task.output === "object" && !Array.isArray(task.output) ? task.output.imageUrl ?? task.output.url : undefined)
-          || (Array.isArray(task.output) ? task.output[0] : undefined);
-        if ((task.status || "").toUpperCase() !== "SUCCEEDED" || !imageUrl) {
-          throw new Error(task.error ?? "The image service returned no image URL.");
-        }
+        }) as unknown as { imageUrl?: string; url?: string };
+        const imageUrl = result.imageUrl ?? result.url;
+        if (!imageUrl) throw new Error("The image service returned no image URL.");
         return imageUrl;
       } catch (error) {
         lastError = error;
@@ -494,12 +474,12 @@ export function AutoDirector() {
     }
 
     for (const shot of session.shots) {
-      shot.clipIds.forEach((clipId) => {
+      shot.clipIds.forEach((clipId, index) => {
         updateClip(clipId, {
           prompt: `${shot.prompt} Preserve the approved artist identity and storyboard composition.`,
           archetypeUrl: shot.imageUrl,
           seedImageUrl: shot.imageUrl,
-          source: "imageToVideo",
+          source: index === 0 ? "imageToVideo" : "continue",
           model: "agnes-video-v2.0",
           sectionLabel: shot.label,
           status: "empty",
@@ -517,12 +497,11 @@ export function AutoDirector() {
     setProductionNote("The Director is generating the approved storyboard clips. You can close this window; production continues in the queue.");
 
     for (const clip of currentClips) {
-      const reference = clip.archetypeUrl ?? clip.seedImageUrl ?? session.characterUrl ?? lookbook[0] ?? "";
-      const source = reference ? "imageToVideo" : "textToVideo";
+      const source = clip.source === "continue" ? "continue" : "imageToVideo";
       enqueueGeneration({
         clipId: clip.id,
         source,
-        seedImageUrl: reference,
+        seedImageUrl: clip.archetypeUrl ?? clip.seedImageUrl ?? session.characterUrl ?? lookbook[0] ?? "",
         prompt: clip.prompt || `Cinematic artist performance based on this approved vision: ${session.vision}`,
         duration: clip.end - clip.start,
         sectionLabel: clip.sectionLabel || "song section",
@@ -536,17 +515,78 @@ export function AutoDirector() {
   const retryFailedProduction = () => {
     const failed = useStore.getState().clips.filter((clip) => clip.status === "failed");
     for (const clip of failed) {
-      const reference = clip.archetypeUrl ?? clip.seedImageUrl ?? session.characterUrl ?? lookbook[0] ?? "";
       enqueueGeneration({
         clipId: clip.id,
-        source: reference ? "imageToVideo" : "textToVideo",
-        seedImageUrl: reference,
+        source: clip.source === "continue" ? "continue" : "imageToVideo",
+        seedImageUrl: clip.archetypeUrl ?? clip.seedImageUrl ?? session.characterUrl ?? lookbook[0] ?? "",
         prompt: clip.prompt || `Cinematic artist performance based on this approved vision: ${session.vision}`,
         duration: clip.end - clip.start,
         sectionLabel: clip.sectionLabel || "song section",
         energy: 0.6,
         model: "agnes-video-v2.0",
       });
+    }
+  };
+
+  const runLipSync = async () => {
+    if (!audioUrl) return;
+    setBusy("Starting approved LipDub shots…");
+    updateSession({ lipSyncStarted: true });
+    let synced = [...session.lipSyncedClipIds];
+    try {
+      for (let index = 0; index < performanceClipIds.length; index += 1) {
+        const clipId = performanceClipIds[index]!;
+        if (synced.includes(clipId)) continue;
+        const clip = useStore.getState().clips.find((item) => item.id === clipId);
+        if (!clip?.videoUrl || clip.status !== "ready") continue;
+        setBusy(`Lip-syncing performance shot ${index + 1} of ${performanceClipIds.length}`);
+        updateClip(clip.id, { status: "generating", lastError: undefined });
+        const task = await startLipSync({
+          videoUrl: clip.videoUrl,
+          audioUrl,
+          audioStart: clip.start,
+          audioEnd: clip.end,
+          promptText: clip.prompt || "The approved recording artist sings naturally with accurate mouth movement and stable identity.",
+          referenceStrength: 1,
+          model: "agnes-video-2.5-flash",
+        });
+        updateClip(clip.id, { generationTaskId: task.id });
+        const final = await pollTask(task.id, 4000, 1_800_000);
+        const outputUrl = taskOutputUrl(final);
+        if ((final.status || "").toUpperCase() !== "SUCCEEDED" || !outputUrl) {
+          throw new Error(final.error ?? `LipDub failed for ${clip.sectionLabel || clip.id}`);
+        }
+        updateClip(clip.id, {
+          videoUrl: outputUrl,
+          source: "lipSync",
+          model: "agnes-video-2.5-flash",
+          status: "ready",
+          generationTaskId: undefined,
+          lastError: undefined,
+        });
+        synced = [...synced, clip.id];
+        setSession((current) => current ? { ...current, lipSyncedClipIds: synced } : current);
+        void saveClipToServer({
+          id: clip.id,
+          name: `${clip.sectionLabel || "performance"} LipDub`,
+          videoUrl: outputUrl,
+          source: "lipSync",
+          prompt: clip.prompt || null,
+          duration: clip.end - clip.start,
+          sectionLabel: clip.sectionLabel || null,
+          model: "agnes-video-2.5-flash",
+        }).catch((error) => console.warn("Could not save automated LipDub clip", error));
+      }
+      updateSession({ stage: "final", lipSyncedClipIds: synced });
+      toast.success("Approved performance shots are synchronized");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setDirectorError(message);
+      toast.error(`Automated LipDub stopped: ${message}`);
+      const active = useStore.getState().clips.find((clip) => clip.status === "generating");
+      if (active) updateClip(active.id, { status: "ready", generationTaskId: undefined, lastError: message });
+    } finally {
+      setBusy(null);
     }
   };
 
@@ -559,7 +599,6 @@ export function AutoDirector() {
         end: clip.end,
         videoUrl: clip.videoUrl!,
         source: clip.source,
-        model: clip.model,
       }));
     if (!ready.length) {
       toast.warning("No approved clips are ready to render");
@@ -818,21 +857,39 @@ export function AutoDirector() {
             </section>
           )}
 
-
+          {session.stage === "lipsync" && (
+            <section>
+              <h3 style={sectionTitleStyle}>6. Approve performance synchronization</h3>
+              <p style={helpStyle}>The Director selected up to {MAX_LIPSYNC_SHOTS} key vocal-performance shots for Agnes LipDub. This step is optional.</p>
+              <div style={summaryGridStyle}>
+                <Summary label="Selected shots" value={String(performanceClipIds.length)} />
+                <Summary label="Completed" value={String(session.lipSyncedClipIds.length)} />
+                <Summary label="Remaining" value={String(Math.max(0, performanceClipIds.length - session.lipSyncedClipIds.length))} />
+              </div>
+              <label style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 18 }}>
+                <input type="checkbox" checked={session.lipSyncEnabled} onChange={(event) => updateSession({ lipSyncEnabled: event.target.checked })} />
+                Lip-sync selected performance shots to the uploaded song
+              </label>
+              <ActionRow>
+                {session.lipSyncEnabled && <button type="button" className="btn primary" onClick={() => void runLipSync()} disabled={!!busy}>Approve and run LipDub</button>}
+                <button type="button" className="btn ghost" onClick={() => updateSession({ stage: "final" })} disabled={!!busy}>Skip LipDub</button>
+              </ActionRow>
+            </section>
+          )}
 
           {session.stage === "final" && (
             <section>
-              <h3 style={sectionTitleStyle}>6. Approve the final cut</h3>
+              <h3 style={sectionTitleStyle}>7. Approve the final cut</h3>
               <p style={helpStyle}>The timeline is ready. Approving this step renders the full song with edge fades, saves the project, and stores the final video in the render library.</p>
               <div style={summaryGridStyle}>
                 <Summary label="Timeline clips" value={String(clips.length)} />
                 <Summary label="Ready" value={String(progress.ready)} />
+                <Summary label="LipDub shots" value={String(session.lipSyncedClipIds.length)} />
               </div>
               {session.renderUrl && (
                 <div style={{ marginTop: 20 }}>
                   <video src={session.renderUrl} controls style={{ width: "100%", borderRadius: 12, background: "#000" }} />
                   <a className="btn primary" href={session.renderUrl} target="_blank" rel="noreferrer" style={{ display: "inline-block", marginTop: 12 }}>Open final video</a>
-                  <SocialExportPanel videoUrl={session.renderUrl} projectId={projectId ?? songId} projectName={projectName || cleanTitle(songFilename)} />
                 </div>
               )}
               <ActionRow>

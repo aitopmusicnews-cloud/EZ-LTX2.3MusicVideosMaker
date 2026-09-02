@@ -1,77 +1,37 @@
 # Music Video Studio
 
-A React/Fastify music-video editor with song analysis, analysis-driven timeline editing, project/media storage, clip generation, and FFmpeg Final Cut rendering. **Agnes Video V2.0 is the active video-generation provider.**
+A React/Fastify music-video editor with audio analysis, timeline editing, rendering, and open-weight LTX-2.3 video generation on Modal.
 
-## Active production workflow
+## What is currently wired up
 
-- React 19 + Vite editor and Fastify 5 TypeScript API
-- Song upload and audio analysis
-- Analysis-defined timeline sections with editable start/end boundaries
-- Agnes Video V2.0 Text → Video and Image → Video
-- Variable clip duration: the timeline owns each logical clip duration
-- Long logical clips are generated as multiple Agnes-sized sub-clips and stitched back into one timeline clip
-- Agnes footage is hard-trimmed, never time-stretched, and normalized to silent H.264/yuv420p MP4
-- Local or private-S3 project/media/render storage
-- Original uploaded song remains the Final Cut soundtrack
-- FFmpeg Final Cut output: H.264 video + AAC original-song audio + yuv420p + MP4 + faststart
-- Project saving/loading, clip library, render queue/progress, and export remain active
+- React 19 + Vite web editor
+- Fastify 5 TypeScript API
+- Local or S3-backed project/media storage
+- Audio analysis and final timeline rendering
+- LTX-2.3 text-to-video, first-frame image-to-video, and previous-clip continuation
+- Native synchronized audio generated with every LTX-2.3 clip
+- Modal webhook callbacks with task polling in the browser
+- An LTX-only editor sidebar; legacy avatar, standalone image-generation, and non-LTX restyle controls are hidden
 
-## Agnes duration mapping
+The UI intentionally exposes only the workflows connected to `modal/ltx_video.py`. Other experimental services remain outside the editor workflow.
 
-Agnes runs at 24 FPS. For each timeline duration `end - start`, the API:
+## LTX-only editor workflow
 
-1. calculates the minimum frames needed at 24 FPS;
-2. chooses the smallest valid `8n + 1` frame count that covers the duration;
-3. keeps `num_frames <= 441`;
-4. splits logical clips longer than `441 / 24 = 18.375s` into internal sub-generations;
-5. hard-trims every returned Agnes segment with FFmpeg to its exact target sub-duration; and
-6. stitches sub-segments back into one silent logical clip.
+Select a timeline clip and choose one of three modes in the right sidebar:
 
-The editor does **not** impose the old 1–5 second generation limit.
+1. **Text → Video** for a prompt-only audio/video generation.
+2. **Image → Video** for animation from one uploaded reference frame.
+3. **Continue Previous Clip** to use the prior clip's final frame as the next clip's first frame.
 
-## Agnes result flow
-
-Create:
-
-```text
-POST https://apihub.agnes-ai.com/v1/videos
-Authorization: Bearer $AGNES_API_KEY
-model: agnes-video-v2.0
-frame_rate: 24
-```
-
-Preferred polling:
-
-```text
-GET https://apihub.agnes-ai.com/agnesapi?video_id=<VIDEO_ID>&model_name=agnes-video-v2.0
-Authorization: Bearer $AGNES_API_KEY
-```
-
-`pending`, `queued`, and `in_progress` remain non-terminal. `completed` accepts only an HTTPS `metadata.url`. If a completed preferred response has no valid `metadata.url`, the API uses the returned `task_id` once at `GET /v1/videos/<TASK_ID>` and again accepts only `metadata.url`. Each active Agnes segment has a hard 360-second polling timeout.
-
-## Storage and image conditioning
-
-S3 objects remain private. For Agnes Image → Video, owned S3 media is re-signed server-side with a short-lived HTTPS URL (15 minutes). No public ACL is added and presigned URLs are not intentionally exposed in logs.
-
-With `STORAGE_BACKEND=local`, production Image → Video requires `PUBLIC_BASE_URL` to be an externally reachable **HTTPS** origin so Agnes can fetch the reference image. Localhost is suitable for editor development but not for a remote provider image fetch.
-
-## Retained Modal functionality
-
-Modal is no longer used for active video generation. It is retained only where this project already used it for independent services:
-
-- `MODAL_AUDIO_URL` — audio analysis fallback/service
-- `MODAL_MEDIA_SUITE_URL` — character/reference image generation
-- `MODAL_KEY` / `MODAL_SECRET` — optional authentication for those retained services
-
-Historical LTX worker files may remain under `modal/` for migration/rollback reference, but the Fastify video-generation routes do not call them and production no longer requires `MODAL_LTX_URL`, `MODAL_LIPSYNC_URL`, or `MODAL_PERFORMANCE_URL`.
+The deployed Modal worker currently renders 1–5 second clips at 768×512 and 24 FPS. The first timeline clip defaults to Text → Video so a new project can start without an existing image or clip.
 
 ## Repository layout
 
 ```text
 apps/web/           React editor
-apps/api/           Fastify API, Agnes adapter, render/storage services
+apps/api/           Fastify API and render/storage services
 packages/shared/    Shared Zod schemas and TypeScript types
-modal/              Retained Modal services and historical worker sources
+modal/              Modal GPU/CPU services
 render.yaml         Render Blueprint configuration
 ```
 
@@ -81,33 +41,90 @@ Requirements:
 
 - Node.js 20 or 22
 - npm 10+
-- ffmpeg and ffprobe
-- Python/Modal CLI only if deploying retained Modal audio/media-suite workers
+- Python 3.12 and the Modal CLI only when deploying Modal workers
+- ffmpeg for local audio/video processing
 
 ```bash
+git clone https://github.com/aitopmusicnews-cloud/Videos.git
+cd Videos
 npm ci
 cp .env.example .env
 npm run dev
 ```
 
-Open `http://localhost:3000`; the API runs on `http://localhost:3001`.
+Open `http://localhost:3000`. The API runs on `http://localhost:3001`.
 
-## Environment
+## Build and checks
 
-Required for Agnes video generation:
-
-```text
-AGNES_API_KEY=...
+```bash
+npm run build
+npm run lint
 ```
 
-Required for the Director planner:
+`npm run build` performs these steps in order:
 
-```text
-GEMINI_API_KEY=...
-GEMINI_DIRECTOR_MODEL=gemini-3.6-flash
+1. Builds `@mvs/shared` into `packages/shared/dist`
+2. Type-checks and builds the Vite frontend into `apps/web/dist`
+3. Compiles the Fastify API into `apps/api/dist`
+
+The production start command is:
+
+```bash
+npm start
 ```
 
-Recommended production storage:
+## Deploy LTX-2.3 to Modal
+
+Install and authenticate the Modal CLI:
+
+```bash
+python3.12 -m venv .venv
+source .venv/bin/activate
+pip install modal
+modal setup
+```
+
+Deploy the LTX worker from the repository root:
+
+```bash
+modal deploy modal/ltx_video.py
+```
+
+The command prints endpoints similar to:
+
+```text
+https://YOUR-WORKSPACE--mvs-ltx-video-generate.modal.run
+https://YOUR-WORKSPACE--mvs-ltx-video-get-file.modal.run
+```
+
+The worker uses the open-weight `diffusers/LTX-2.3-Distilled-Diffusers` checkpoint, synchronized audio/video output, eight inference steps, and an A100-80GB GPU. The first request may be slow while the model downloads into the `mvs-ltx-models` Modal Volume.
+
+Test the deployed generation endpoint:
+
+```bash
+curl -X POST "$MODAL_LTX_URL" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "prompt": "A cinematic nighttime performance beneath orange neon lights",
+    "duration": 4
+  }'
+```
+
+A successful launch returns an accepted job and Modal call ID immediately. The GPU work continues asynchronously.
+
+## Render deployment
+
+The included `render.yaml` uses npm consistently and builds both the frontend and API.
+
+Create or update the service through a Render Blueprint, then set these environment variables in Render:
+
+```text
+PUBLIC_BASE_URL=https://YOUR-SERVICE.onrender.com
+WEB_ORIGIN=https://YOUR-SERVICE.onrender.com
+MODAL_LTX_URL=https://YOUR-WORKSPACE--mvs-ltx-video-generate.modal.run
+```
+
+For persistent S3 storage, also set all four values:
 
 ```text
 STORAGE_BACKEND=s3
@@ -115,32 +132,58 @@ S3_BUCKET=your-bucket
 S3_REGION=us-east-1
 AWS_ACCESS_KEY_ID=...
 AWS_SECRET_ACCESS_KEY=...
-# AWS_SESSION_TOKEN=...  # when applicable
 ```
 
-Retained Modal services are optional and independent of Agnes:
+When the S3 configuration is incomplete, the API deliberately falls back to local storage so the Render service can still start. Render local storage is ephemeral, so configure S3 before relying on saved projects or uploaded media.
+
+Optional Modal proxy-token protection:
 
 ```text
-MODAL_AUDIO_URL=...
-MODAL_MEDIA_SUITE_URL=...
-MODAL_KEY=...
-MODAL_SECRET=...
+MODAL_KEY=wk-...
+MODAL_SECRET=ws-...
 ```
 
-## Build and start
+Render should run:
 
-```bash
-npm run lint
-npm run build
-npm start
+```text
+Build: npm ci --include=dev --no-audit --no-fund && npm run build
+Start: npm start
+Health check: /health
 ```
 
-The API starts directly from `apps/api/dist/server.js`; there is no LTX/LipDub startup warmup.
+## Generation request flow
 
-## Final Cut
+1. The browser submits a generation request to the Fastify API.
+2. The API creates a persistent job record and calls the Modal endpoint.
+3. Modal immediately spawns the A100 generation function and returns a call ID.
+4. The browser polls `/api/tasks/:id` through the Fastify API.
+5. When generation finishes, Modal posts the result to `/api/modal/webhook`.
+6. The task endpoint returns `SUCCEEDED` and the generated MP4 URL.
 
-Final rendering keeps the original uploaded song synchronized as AAC audio. Agnes clips are already generated long enough for their timeline slots and are hard-trimmed; Final Cut never time-stretches clips whose model is `agnes-video-v2.0`. Historical ordinary source clips keep their pre-existing stretch behavior for backward compatibility. Output uses H.264, AAC, yuv420p, MP4, and `+faststart`.
+## Troubleshooting
+
+### Render builds but cannot start
+
+Confirm that the deploy is using the current `render.yaml`. The previous API TypeScript configuration inherited `noEmit: true`, which meant `apps/api/dist/server.js` was never created. The repaired configuration emits the server build.
+
+### Render reports missing AWS credentials
+
+Set every S3 variable listed above, or temporarily set `STORAGE_BACKEND=local`.
+
+### Video generation stays pending
+
+Check all of the following:
+
+- `MODAL_LTX_URL` is the deployed `generate` endpoint, not the file endpoint.
+- `PUBLIC_BASE_URL` exactly matches the public Render service URL.
+- The Modal app is deployed and its logs show the LTX model loading.
+- Render can receive `POST /api/modal/webhook` requests.
+- If Modal proxy authentication is enabled, both `MODAL_KEY` and `MODAL_SECRET` are set in Render.
+
+### Modal deployment fails while importing LTX classes
+
+Redeploy from the repaired `modal/ltx_video.py`. It installs a current Diffusers build directly from Hugging Face’s GitHub repository because LTX-2.3 support requires recent Diffusers code.
 
 ## Security
 
-The existing SSRF/path-validation protections remain in place. `AGNES_API_KEY` is read only server-side. Authorization headers, prompts, presigned reference URLs, completed provider URLs, and full Agnes responses are not intentionally written to diagnostics. Keep `.env`, cloud credentials, media, logs, and generated output out of source control.
+Never commit `.env`, Render exports, AWS keys, Modal secrets, uploaded media, virtual environments, logs, or generated build output. These paths are covered by `.gitignore`.

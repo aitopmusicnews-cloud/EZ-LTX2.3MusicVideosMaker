@@ -25,7 +25,8 @@ export function patchDirectorChat(source, replaceRequired) {
     if (!session.shotApprovals[clipId]?.approved) { setError(\`Approve the shot image for \${shot.sectionLabel} before generating video.\`); return; }
     const conditioningUrl = resolveReferenceUrl(shot.conditioningReferenceId) || undefined;
     if (shot.requiresCharacter && !conditioningUrl) { setError(\`\${shot.sectionLabel} needs a character asset before video generation.\`); return; }
-    const source = conditioningUrl ? "imageToVideo" : "textToVideo";
+    const previousReady = clipIndex > 0 && timelineClips[clipIndex - 1]?.status === "ready" && Boolean(timelineClips[clipIndex - 1]?.videoUrl);
+    const source = conditioningUrl ? "imageToVideo" : previousReady ? "continue" : "textToVideo";
     updateClip(clip.id, {
       prompt: shot.prompt,
       sectionLabel: shot.sectionLabel,

@@ -10,8 +10,16 @@ import {
 } from "../lib/musicPromptEnhancer.js";
 import { toast } from "../lib/toast.js";
 
+type LipSyncCoverage =
+  | "entire-song"
+  | "hooks-adlibs"
+  | "hooks-only"
+  | "selected-clips"
+  | "none";
+
 type ContinuityMode =
   | "automatic"
+  | "continue"
   | "new-shot"
   | "character-reference";
 
@@ -22,6 +30,7 @@ type EasyWayBrief = {
   videoType: MusicVideoType;
   visualConcepts: string[];
   performanceChoices: string[];
+  lipSyncCoverage: LipSyncCoverage;
   adlibChoices: string[];
   cameraStyle: CameraStyle;
   compositionChoices: string[];
@@ -38,6 +47,7 @@ const DEFAULT_BRIEF: EasyWayBrief = {
   videoType: "promo",
   visualConcepts: ["Artist performance"],
   performanceChoices: ["Natural movement", "Direct to camera"],
+  lipSyncCoverage: "hooks-adlibs",
   adlibChoices: ["Automatic"],
   cameraStyle: "automatic",
   compositionChoices: ["Maintain framing", "Keep artist centered"],
@@ -206,7 +216,8 @@ function buildPrompt(
   hasPreviousClip: boolean,
 ): string {
   const shouldContinue =
-    brief.continuityMode === "automatic" && hasPreviousClip;
+    brief.continuityMode === "continue" ||
+    (brief.continuityMode === "automatic" && hasPreviousClip);
 
   return buildMusicVideoPrompt({
     rawInput: buildRawIdea(brief, sectionLabel),
@@ -218,7 +229,7 @@ function buildPrompt(
     sectionLabel,
     energy,
     hasPreviousClip: shouldContinue,
-    suppliedSongAudio: false,
+    suppliedSongAudio: brief.lipSyncCoverage !== "none",
   });
 }
 
@@ -316,6 +327,7 @@ export function EasyWayPromptAssistant() {
     Boolean(audioUrl && analysis),
     brief.visualConcepts.length > 0,
     brief.performanceChoices.length > 0,
+    Boolean(brief.lipSyncCoverage),
     Boolean(brief.cameraStyle),
     Boolean(brief.continuityMode),
     brief.exportFormats.length > 0,
@@ -380,13 +392,15 @@ export function EasyWayPromptAssistant() {
       analysis.duration ?? Math.max(selectedClip.end, 1),
     );
     const clipIndex = clips.findIndex((clip) => clip.id === selectedClip.id);
-    const shouldContinue = brief.continuityMode === "automatic" && clipIndex > 0;
+    const shouldContinue =
+      brief.continuityMode === "continue" ||
+      (brief.continuityMode === "automatic" && clipIndex > 0);
 
     updateClip(selectedClip.id, {
       prompt: buildPrompt(brief, label, energy, shouldContinue),
       archetypeUrl: brief.mainCharacterUrl,
       seedImageUrl: brief.mainCharacterUrl,
-      source: "imageToVideo",
+      source: shouldContinue ? "continue" : "imageToVideo",
       model: "agnes-video-v2.0",
       sectionLabel: label,
       lastError: undefined,
@@ -407,12 +421,14 @@ export function EasyWayPromptAssistant() {
     clips.forEach((clip, index) => {
       const label = sectionLabelFor(clip.start, clip.end, analysis.sections ?? []);
       const energy = averageEnergy(analysis.rmsCurve ?? [], clip.start, clip.end, duration);
-      const shouldContinue = brief.continuityMode === "automatic" && index > 0;
+      const shouldContinue =
+        brief.continuityMode === "continue" ||
+        (brief.continuityMode === "automatic" && index > 0);
       updateClip(clip.id, {
         prompt: buildPrompt(brief, label, energy, shouldContinue),
         archetypeUrl: brief.mainCharacterUrl,
         seedImageUrl: brief.mainCharacterUrl,
-        source: "imageToVideo",
+        source: shouldContinue ? "continue" : "imageToVideo",
         model: "agnes-video-v2.0",
         sectionLabel: label,
         lastError: undefined,
@@ -428,7 +444,8 @@ export function EasyWayPromptAssistant() {
       videoType: "promo",
       visualConcepts: brief.visualConcepts.length ? brief.visualConcepts : ["Artist performance"],
       performanceChoices: ["Natural movement", "Direct to camera"],
-          adlibChoices: ["Automatic"],
+      lipSyncCoverage: "hooks-adlibs",
+      adlibChoices: ["Automatic"],
       cameraStyle: "automatic",
       compositionChoices: ["Maintain framing", "Keep artist centered", "Vertical-safe composition"],
       continuityMode: "automatic",
@@ -503,7 +520,22 @@ export function EasyWayPromptAssistant() {
           <MultiChoiceDropdown title="3. Visual Concept" values={brief.visualConcepts} options={VISUAL_CONCEPTS} onChange={(values) => updateBrief("visualConcepts", values)} />
           <MultiChoiceDropdown title="4. Performance" values={brief.performanceChoices} options={PERFORMANCE_CHOICES} onChange={(values) => updateBrief("performanceChoices", values)} />
 
-          <MultiChoiceDropdown title="5. Ad-lib Visual Treatment" values={brief.adlibChoices} options={ADLIB_CHOICES} onChange={(values) => updateBrief("adlibChoices", values)} />
+          <details className="easy-way-dropdown">
+            <summary><span>5. Lip-Sync & Ad-libs</span><span className="easy-way-summary-value">{brief.lipSyncCoverage.replaceAll("-", " ")}</span></summary>
+            <div className="easy-way-dropdown-body">
+              <label className="easy-way-field">
+                <span>Lip-sync coverage</span>
+                <select value={brief.lipSyncCoverage} onChange={(event) => updateBrief("lipSyncCoverage", event.target.value as LipSyncCoverage)}>
+                  <option value="entire-song">Entire song</option>
+                  <option value="hooks-adlibs">Hooks and ad-libs</option>
+                  <option value="hooks-only">Hooks only</option>
+                  <option value="selected-clips">Selected clips</option>
+                  <option value="none">No lip-sync</option>
+                </select>
+              </label>
+              <MultiChoiceDropdown title="Ad-lib treatment" values={brief.adlibChoices} options={ADLIB_CHOICES} onChange={(values) => updateBrief("adlibChoices", values)} />
+            </div>
+          </details>
 
           <details className="easy-way-dropdown">
             <summary><span>6. Camera</span><span className="easy-way-summary-value">{brief.cameraStyle.replaceAll("-", " ")}</span></summary>
@@ -530,6 +562,7 @@ export function EasyWayPromptAssistant() {
                 <span>Between clips</span>
                 <select value={brief.continuityMode} onChange={(event) => updateBrief("continuityMode", event.target.value as ContinuityMode)}>
                   <option value="automatic">Let The Easy Way decide</option>
+                  <option value="continue">Continue previous frame</option>
                   <option value="new-shot">Start a new shot</option>
                   <option value="character-reference">Return to character reference</option>
                 </select>
@@ -558,7 +591,7 @@ export function EasyWayPromptAssistant() {
             <span>{brief.mainCharacterUrl ? "✓" : "○"} Character</span>
             <span>{analysis ? "✓" : "○"} Song analysis</span>
             <span>{brief.visualConcepts.length ? "✓" : "○"} Visual concept</span>
-            <span>✓ Original-song soundtrack</span>
+            <span>{brief.lipSyncCoverage ? "✓" : "○"} Lip-sync plan</span>
           </div>
         </div>
 

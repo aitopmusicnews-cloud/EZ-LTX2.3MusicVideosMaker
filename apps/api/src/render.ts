@@ -10,10 +10,9 @@ export type RenderClip = {
   start: number;
   end: number;
   videoUrl: string;
-  /** Clip source — retained for backwards compatibility with saved projects. */
+  /** Clip source — only used to gate the lipSync-specific render path
+   *  (no time-stretch, hard trim instead, so lips stay in sync with audio). */
   source?: string;
-  /** Provider model. Agnes clips are already duration-normalized and must never be time-stretched. */
-  model?: string;
 };
 
 export type RenderRequest = {
@@ -109,7 +108,7 @@ export async function renderTimeline(req: RenderRequest): Promise<{ url: string 
     const scalePad =
       `[${inputIdx}:v]scale=1280:720:force_original_aspect_ratio=decrease,` +
       `pad=1280:720:(ow-iw)/2:(oh-ih)/2`;
-    if (clip.source === "lipSync" || clip.model === "agnes-video-v2.0") {
+    if (clip.source === "lipSync") {
       baseChain =
         `${scalePad},trim=duration=${slotDur.toFixed(6)},` +
         `setpts=PTS-STARTPTS+${clip.start.toFixed(6)}/TB`;
@@ -144,7 +143,6 @@ export async function renderTimeline(req: RenderRequest): Promise<{ url: string 
     "-pix_fmt", "yuv420p",
     "-c:a", "aac",
     "-shortest",
-    "-movflags", "+faststart",
     "-y",
     outputPath,
   ];

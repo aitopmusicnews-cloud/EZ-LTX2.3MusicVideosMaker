@@ -1224,7 +1224,7 @@ body.dragging-resize .resize-handle { background: rgba(255, 107, 0, 0.6); }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 5px; border: 2px solid var(--surface); }
 ::-webkit-scrollbar-thumb:hover { background: var(--border-strong); }
 
-/* Video generation controls */
+/* LTX-2.3 focused generation controls */
 .ltx-engine-card {
   margin-bottom: var(--sp-4);
   padding: 10px 12px;

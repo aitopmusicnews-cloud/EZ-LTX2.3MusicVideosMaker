@@ -1,24 +1,101 @@
 import { useEffect, useMemo, useState } from "react";
-import { useStore } from "../lib/store.js";
-import type { Clip } from "@mvs/shared";
-import { enqueueGeneration, type GenerationSource } from "../lib/scheduler.js";
-import { extractLastFrame, pollTask, startTextToImage } from "../lib/api.js";
+import { useStore, MAX_CLIP_LEN } from "../lib/store.js";
+import type { Clip, Task } from "@mvs/shared";
+import { enqueueGeneration } from "../lib/scheduler.js";
+import {
+  extractLastFrame,
+  pollTask,
+  startLipSync,
+  startPerformance,
+  startTextToImage,
+} from "../lib/api.js";
 import { AssetUploader } from "./AssetUploader.js";
 import { toast } from "../lib/toast.js";
-import { ensureImageVideoPrompt } from "../lib/musicPromptEnhancer.js";
+import { ensureImageVideoPrompt, ensurePerformancePrompt } from "../lib/musicPromptEnhancer.js";
 
-const AGNES_MODEL = "agnes-video-v2.0";
+type LtxSource = "textToVideo" | "imageToVideo" | "continue";
 
-const SOURCES: Array<{ value: GenerationSource; label: string; desc: string }> = [
+type LipSyncProgress = {
+  percent: number;
+  stage: number;
+  totalStages: number;
+  title: string;
+  detail: string;
+  status: "running" | "complete" | "failed";
+};
+
+const LIP_SYNC_STAGES = [
+  {
+    afterMs: 0,
+    percent: 5,
+    title: "Submitting LipDub job",
+    detail: "Sending the performance reference and matching song section to Agnes.",
+  },
+  {
+    afterMs: 3_000,
+    percent: 12,
+    title: "Starting Agnes API",
+    detail: "Waiting for Agnes to accept the audio-reference generation task.",
+  },
+  {
+    afterMs: 20_000,
+    percent: 24,
+    title: "Preparing media",
+    detail: "Reading the source clip and slicing the exact matching section of the song.",
+  },
+  {
+    afterMs: 45_000,
+    percent: 36,
+    title: "Building direction",
+    detail: "Preparing the visual identity, prompt, and song-reference conditioning.",
+  },
+  {
+    afterMs: 90_000,
+    percent: 50,
+    title: "Analyzing the performance",
+    detail: "Combining the extracted performance frame with the matching song reference.",
+  },
+  {
+    afterMs: 150_000,
+    percent: 64,
+    title: "LipDub generation · pass 1",
+    detail: "Generating audio-guided facial and performance motion from the references.",
+  },
+  {
+    afterMs: 300_000,
+    percent: 78,
+    title: "LipDub generation · pass 2",
+    detail: "Refining identity, motion, timing, and temporal consistency.",
+  },
+  {
+    afterMs: 480_000,
+    percent: 90,
+    title: "Rendering the video",
+    detail: "Rendering the generated performance video.",
+  },
+  {
+    afterMs: 720_000,
+    percent: 96,
+    title: "Finalizing",
+    detail: "Waiting for Agnes to publish the finished clip.",
+  },
+] as const;
+
+const SOURCES: Array<{ value: LtxSource; label: string; desc: string }> = [
   {
     value: "textToVideo",
     label: "Text → Video",
-    desc: "Generate a visual directly from the scene direction for this timeline slot.",
+    desc: "Create a video directly from one scene prompt.",
   },
   {
     value: "imageToVideo",
     label: "Image → Video",
-    desc: "Animate a selected reference frame with Agnes while preserving the timeline duration.",
+    desc: "Animate a reference frame while Agnes generates matching motion.",
+  },
+  {
+    value: "continue",
+    label: "Continue Previous Clip",
+    desc: "Use the previous clip's last frame as the first frame of this generation.",
   },
 ];
 
@@ -33,14 +110,51 @@ const MOTION_PRESETS = [
   { label: "Handheld", text: "natural handheld camera movement with controlled shake" },
 ];
 
-function normalizeSource(source: string): GenerationSource {
-  return source === "imageToVideo" || source === "archetype" ? "imageToVideo" : "textToVideo";
+function normalizeSource(source: string): LtxSource {
+  if (source === "continue") return "continue";
+  if (source === "imageToVideo" || source === "archetype") return "imageToVideo";
+  return "textToVideo";
+}
+
+function taskOutputUrl(task: Task): string | undefined {
+  if (task.outputUrl) return task.outputUrl;
+  if (Array.isArray(task.output)) return task.output[0];
+  return task.output?.videoUrl ?? task.output?.imageUrl ?? task.output?.url;
+}
+
+function estimatedLipSyncProgress(elapsedMs: number): LipSyncProgress {
+  let index = 0;
+  for (let i = 1; i < LIP_SYNC_STAGES.length; i += 1) {
+    if (elapsedMs >= LIP_SYNC_STAGES[i]!.afterMs) index = i;
+    else break;
+  }
+
+  const current = LIP_SYNC_STAGES[index]!;
+  const next = LIP_SYNC_STAGES[index + 1];
+  let percent: number = current.percent;
+  if (next) {
+    const span = Math.max(1, next.afterMs - current.afterMs);
+    const fraction = Math.min(1, Math.max(0, (elapsedMs - current.afterMs) / span));
+    percent = Math.min(next.percent - 1, Math.round(current.percent + fraction * (next.percent - current.percent)));
+  } else {
+    percent = Math.min(98, current.percent + Math.floor((elapsedMs - current.afterMs) / 120_000));
+  }
+
+  return {
+    percent,
+    stage: index + 1,
+    totalStages: LIP_SYNC_STAGES.length,
+    title: current.title,
+    detail: current.detail,
+    status: "running",
+  };
 }
 
 export function Sidebar() {
   const selectedId = useStore((s) => s.selectedClipId);
   const clips = useStore((s) => s.clips);
   const analysis = useStore((s) => s.analysis);
+  const audioUrl = useStore((s) => s.audioUrl);
   const lookbook = useStore((s) => s.lookbook);
   const addLookbook = useStore((s) => s.addLookbook);
   const updateClip = useStore((s) => s.updateClip);
@@ -48,14 +162,19 @@ export function Sidebar() {
   const [extracting, setExtracting] = useState(false);
   const [creatingCharacter, setCreatingCharacter] = useState(false);
   const [characterPrompt, setCharacterPrompt] = useState("");
+  const [lipSyncing, setLipSyncing] = useState(false);
+  const [performanceGenerating, setPerformanceGenerating] = useState(false);
+  const [useTalkingHeadLora, setUseTalkingHeadLora] = useState(false);
+  const [lipSyncProgress, setLipSyncProgress] = useState<LipSyncProgress | null>(null);
+  const [referenceStrength, setReferenceStrength] = useState(1);
   const clip = useMemo(() => clips.find((c) => c.id === selectedId) ?? null, [clips, selectedId]);
   const source = normalizeSource(clip?.source ?? "textToVideo");
 
   useEffect(() => {
-    if (clip && clip.status !== "ready" && (clip.source !== source || clip.model !== AGNES_MODEL)) {
-      updateClip(clip.id, { source, model: AGNES_MODEL });
+    if (clip && clip.source !== source && clip.status !== "ready" && clip.source !== "lipSync") {
+      updateClip(clip.id, { source, model: "agnes-video-v2.0" });
     }
-  }, [clip?.id, clip?.source, clip?.status, clip?.model, source, updateClip]);
+  }, [clip?.id, clip?.source, clip?.status, source, updateClip]);
 
   if (!clip || !analysis) return null;
 
@@ -63,33 +182,47 @@ export function Sidebar() {
   const rmsCurve = analysis.rmsCurve ?? [];
   const analysisDuration = analysis.duration ?? Math.max(clip.end, 1);
   const section = sections.find((s) => (s.start ?? 0) <= clip.start && (s.end ?? 0) >= clip.end);
-  const sectionLabel = section?.label ?? clip.sectionLabel ?? "section";
+  const sectionLabel = section?.label ?? "section";
   const durationSec = clip.end - clip.start;
   const energy = avgRms(rmsCurve, clip.start, clip.end, analysisDuration);
   const prompt = clip.prompt ?? "";
   const cameraPrompt = (clip as Clip & { cameraPrompt?: string }).cameraPrompt ?? "";
+
+  const clipIdx = clips.findIndex((c) => c.id === clip.id);
+  const hasPrev = clipIdx > 0 && clips[clipIdx - 1]?.status === "ready";
   const selectedImage = clip.archetypeUrl ?? lookbook[0];
 
-  const setSource = (next: GenerationSource) => {
-    updateClip(clip.id, { source: next, model: AGNES_MODEL, lastError: undefined });
+  const setSource = (next: LtxSource) => {
+    updateClip(clip.id, {
+      source: next,
+      model: "agnes-video-v2.0",
+      lastError: undefined,
+    });
   };
 
-  const canGenerate = checkCanGenerate(source, { prompt, selectedImage });
+  const canGenerate = checkCanGenerate(source, {
+    prompt,
+    selectedImage,
+    hasPrev,
+  });
 
   const onGenerate = () => {
     if (!canGenerate.ok) {
       toast.warning(canGenerate.reason);
       return;
     }
-    const rawPrompt = [prompt.trim(), cameraPrompt.trim()]
-      .filter(Boolean)
-      .join(". Camera direction: ");
+
+    const rawPrompt = [
+      prompt.trim(),
+      cameraPrompt.trim(),
+    ].filter(Boolean).join(". Camera direction: ");
     const fullPrompt = ensureImageVideoPrompt(rawPrompt, {
       sectionLabel,
       energy,
-      hasPreviousClip: false,
+      hasPreviousClip: source === "continue",
     });
-    updateClip(clip.id, { prompt: fullPrompt, model: AGNES_MODEL });
+    updateClip(clip.id, { prompt: fullPrompt });
+
     enqueueGeneration({
       clipId: clip.id,
       source,
@@ -98,7 +231,7 @@ export function Sidebar() {
       duration: durationSec,
       sectionLabel,
       energy,
-      model: AGNES_MODEL,
+      model: "agnes-video-v2.0",
     });
   };
 
@@ -110,12 +243,14 @@ export function Sidebar() {
     }
     setCreatingCharacter(true);
     try {
-      const task = await startTextToImage({ promptText: text, ratio: "16:9", model: "sdxl" });
-      const final = await pollTask(task.id, 1500, 180_000);
-      const imageUrl = final.outputUrl || (!Array.isArray(final.output) ? final.output?.imageUrl ?? final.output?.url : undefined);
-      if (!imageUrl) throw new Error(final.error ?? "The image service returned no image URL");
-      addLookbook(imageUrl);
-      updateClip(clip.id, { archetypeUrl: imageUrl });
+      const result = await startTextToImage({
+        promptText: text,
+        ratio: "16:9",
+        model: "sdxl",
+      }) as unknown as { imageUrl: string };
+      if (!result.imageUrl) throw new Error("The image service returned no image URL");
+      addLookbook(result.imageUrl);
+      updateClip(clip.id, { archetypeUrl: result.imageUrl });
       toast.success("Character reference created and selected");
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
@@ -125,33 +260,222 @@ export function Sidebar() {
     }
   };
 
+  const onCreatePerformance = async () => {
+    if (!selectedImage) {
+      toast.warning("Select the artist reference image first");
+      return;
+    }
+    if (!audioUrl) {
+      toast.warning("Load the song before creating a performance");
+      return;
+    }
+    if (clip.status === "queued" || clip.status === "generating") {
+      toast.info("This clip already has a generation in progress");
+      return;
+    }
+
+    const previousVideoUrl = clip.videoUrl;
+    const previousSource = clip.source;
+    const previousModel = clip.model;
+    const performanceDuration = Math.min(5, Math.max(1, durationSec));
+    const rawPerformancePrompt = [
+      prompt.trim(),
+      cameraPrompt.trim()
+        ? `Camera direction: ${cameraPrompt.trim()}`
+        : "",
+    ].filter(Boolean).join(" ");
+    const fullPrompt = ensurePerformancePrompt(
+      rawPerformancePrompt,
+      {
+        sectionLabel,
+        energy,
+        hasPreviousClip: hasPrev,
+      },
+    );
+    updateClip(clip.id, { prompt: fullPrompt });
+    setPerformanceGenerating(true);
+    updateClip(clip.id, {
+      status: "generating",
+      source: "imageToVideo",
+      model: "agnes-video-2.5-flash",
+      generationTaskId: undefined,
+      lastError: undefined,
+    });
+
+    try {
+      toast.info("Starting the audio-driven Agnes performance…");
+      const task = await startPerformance({
+        imageUrl: selectedImage,
+        audioUrl,
+        audioStart: clip.start,
+        audioEnd: clip.start + performanceDuration,
+        duration: performanceDuration,
+        promptText: fullPrompt,
+        aspectRatio: "16:9",
+        imageStrength: 1,
+        useTalkingHeadLora,
+        loraStrength: 1,
+      });
+      updateClip(clip.id, { generationTaskId: task.id });
+
+      const final = await pollTask(task.id, 5000, 7_200_000);
+      const outputUrl = taskOutputUrl(final);
+      if ((final.status || "").toUpperCase() !== "SUCCEEDED" || !outputUrl) {
+        throw new Error(final.error ?? `Performance generation ended in ${final.status}`);
+      }
+
+      updateClip(clip.id, {
+        videoUrl: outputUrl,
+        source: "imageToVideo",
+        model: "agnes-video-2.5-flash",
+        status: "ready",
+        generationTaskId: undefined,
+        lastError: undefined,
+      });
+
+      try {
+        const { url } = await extractLastFrame(outputUrl);
+        addLookbook(url);
+        updateClip(clip.id, { thumbnailUrl: url });
+      } catch (frameError) {
+        console.warn("Performance completed, but last-frame extraction failed", frameError);
+      }
+
+      toast.success("Audio-driven singing performance ready");
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      updateClip(clip.id, {
+        videoUrl: previousVideoUrl,
+        source: previousSource,
+        model: previousModel,
+        status: previousVideoUrl ? "ready" : "empty",
+        generationTaskId: undefined,
+        lastError: reason,
+      });
+      toast.error(`Performance generation failed: ${reason.slice(0, 140)}`);
+    } finally {
+      setPerformanceGenerating(false);
+    }
+  };
+  const onLipSync = async () => {
+    if (!clip.videoUrl || clip.status !== "ready") {
+      toast.warning("Generate or upload a performance clip before lip-syncing");
+      return;
+    }
+    if (!audioUrl) {
+      toast.warning("Load the song before lip-syncing");
+      return;
+    }
+
+    const referenceVideoUrl = clip.videoUrl;
+    const previousSource = clip.source;
+    const startedAt = Date.now();
+    let progressTimer: ReturnType<typeof setInterval> | null = null;
+    setLipSyncing(true);
+    setLipSyncProgress(estimatedLipSyncProgress(0));
+    progressTimer = setInterval(() => {
+      setLipSyncProgress(estimatedLipSyncProgress(Date.now() - startedAt));
+    }, 1000);
+
+    try {
+      toast.info("Preparing the matching song segment for LipDub…");
+      updateClip(clip.id, {
+        status: "generating",
+        generationTaskId: undefined,
+        lastError: undefined,
+      });
+
+      const task = await startLipSync({
+        videoUrl: referenceVideoUrl,
+        audioUrl,
+        audioStart: clip.start,
+        audioEnd: clip.end,
+        promptText: prompt.trim() || "The performer sings naturally to the supplied vocal performance with accurate mouth movement and stable identity.",
+        referenceStrength,
+        model: "agnes-video-2.5-flash",
+      });
+      updateClip(clip.id, { generationTaskId: task.id });
+
+      const final = await pollTask(task.id, 3000, 1_800_000);
+      const outputUrl = taskOutputUrl(final);
+      if ((final.status || "").toUpperCase() !== "SUCCEEDED" || !outputUrl) {
+        throw new Error(final.error ?? `LipDub ended in ${final.status}`);
+      }
+
+      setLipSyncProgress({
+        percent: 100,
+        stage: LIP_SYNC_STAGES.length,
+        totalStages: LIP_SYNC_STAGES.length,
+        title: "LipDub complete",
+        detail: "The synchronized performance clip is ready to preview and save.",
+        status: "complete",
+      });
+      updateClip(clip.id, {
+        videoUrl: outputUrl,
+        source: "lipSync",
+        model: "agnes-video-2.5-flash",
+        status: "ready",
+        generationTaskId: undefined,
+        lastError: undefined,
+      });
+      toast.success("Agnes LipDub clip ready");
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      setLipSyncProgress((current) => ({
+        percent: current?.percent ?? 0,
+        stage: current?.stage ?? 1,
+        totalStages: LIP_SYNC_STAGES.length,
+        title: "LipDub failed",
+        detail: reason,
+        status: "failed",
+      }));
+      updateClip(clip.id, {
+        videoUrl: referenceVideoUrl,
+        source: previousSource,
+        status: "ready",
+        generationTaskId: undefined,
+        lastError: reason,
+      });
+      toast.error(`Lip-sync failed: ${reason.slice(0, 140)}`);
+    } finally {
+      if (progressTimer) clearInterval(progressTimer);
+      setLipSyncing(false);
+    }
+  };
+
   const onExtractFrame = async () => {
     if (!clip.videoUrl) return;
     setExtracting(true);
     try {
       const { url } = await extractLastFrame(clip.videoUrl);
       addLookbook(url);
-      updateClip(clip.id, { archetypeUrl: url });
-      toast.success("Last frame saved as a reusable reference");
-    } catch (error) {
-      toast.error(`Frame extraction failed: ${error instanceof Error ? error.message : String(error)}`);
+      toast.success("Last frame added to reference images");
+    } catch {
+      toast.error("Could not extract the last frame");
     } finally {
       setExtracting(false);
     }
   };
 
-  const promptLabel = source === "textToVideo" ? "Scene prompt" : "Motion prompt";
+  const promptLabel =
+    source === "textToVideo"
+      ? "Scene + audio prompt"
+      : source === "imageToVideo"
+        ? "Motion + audio prompt"
+        : "Continuation + audio prompt";
+
+  const showLipSyncPanel = !!clip.videoUrl && (clip.status === "ready" || lipSyncing);
 
   return (
     <>
       <div className="sidebar-header-row">
-        <span className="pill">Agnes Video</span>
+        <span className="pill">Agnes</span>
         <span className="meta">{durationSec.toFixed(1)}s · {clip.id}</span>
       </div>
 
       <div className="ltx-engine-card">
-        <div className="ltx-engine-title">Music Video Generation</div>
-        <div className="ltx-engine-meta">Agnes Video V2.0 · timeline-timed visuals · original song soundtrack</div>
+        <div className="ltx-engine-title">Complete Music Video Stack</div>
+        <div className="ltx-engine-meta">Agnes video + audio · character frames · LipDub · Agnes API</div>
       </div>
 
       <div className="option-group">
@@ -162,7 +486,12 @@ export function Sidebar() {
           value={characterPrompt}
           onChange={(e) => setCharacterPrompt(e.target.value)}
         />
-        <button type="button" className="btn ghost w-full" onClick={onCreateCharacter} disabled={creatingCharacter}>
+        <button
+          type="button"
+          className="btn ghost w-full"
+          onClick={onCreateCharacter}
+          disabled={creatingCharacter}
+        >
           {creatingCharacter ? "Creating reference…" : "Generate character reference"}
         </button>
         <div className="select-desc">The result is added to your reference images and selected for this clip.</div>
@@ -171,8 +500,16 @@ export function Sidebar() {
       <div className="option-group">
         <div className="label">Generation mode</div>
         <div className="select-wrap">
-          <select className="select" value={source} onChange={(e) => setSource(e.target.value as GenerationSource)}>
-            {SOURCES.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+          <select
+            className="select"
+            value={source}
+            onChange={(e) => setSource(e.target.value as LtxSource)}
+          >
+            {SOURCES.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
           </select>
           <span className="select-chevron">▾</span>
         </div>
@@ -188,19 +525,60 @@ export function Sidebar() {
             onPick={(url) => updateClip(clip.id, { archetypeUrl: url })}
             onClear={() => updateClip(clip.id, { archetypeUrl: undefined })}
           />
-          <div className="select-desc">Upload, generate, or select one image. Agnes uses it as the image-to-video reference.</div>
+          <div className="select-desc">Upload, generate, or select one image. Agnes animates it as frame one.</div>
+        </div>
+      )}
+      {source === "imageToVideo" && (
+        <div className="option-group">
+          <div className="label">Singing performance from image + song</div>
+          <div className="select-desc">
+            Uses the selected artist image and this clip's exact song section with Agnes A2Vid. This creates a new performance; it does not require an existing video.
+          </div>
+          <label style={{ display: "flex", gap: 8, alignItems: "flex-start", fontSize: 12 }}>
+            <input
+              type="checkbox"
+              checked={useTalkingHeadLora}
+              onChange={(event) => setUseTalkingHeadLora(event.target.checked)}
+              disabled={performanceGenerating}
+            />
+            <span>Experimental character-specific talking-head LoRA</span>
+          </label>
+          <div className="select-desc">
+            Leave this off for the official A2Vid audio-driven model. The included community LoRA is tied to its training character and is not cleared for commercial use without permission.
+          </div>
+          <button
+            type="button"
+            className="generate-btn"
+            onClick={onCreatePerformance}
+            disabled={performanceGenerating || clip.status === "generating" || !selectedImage || !audioUrl}
+          >
+            {performanceGenerating ? "Creating singing performance…" : "Create singing performance"}
+          </button>
+          <div className="select-desc">First version generates up to 5 seconds per shot and keeps the regular Image → Video button unchanged.</div>
         </div>
       )}
 
+      {source === "continue" && (
+        <div className={`continuity-status${hasPrev ? " ready" : " blocked"}`}>
+          <strong>{hasPrev ? "Previous frame ready" : "Previous clip required"}</strong>
+          <span>
+            {hasPrev
+              ? "The last frame of the previous generated clip will be used automatically."
+              : "Generate the clip immediately to the left before continuing this one."}
+          </span>
+        </div>
+      )}
       <div className="option-group">
         <div className="label">{promptLabel}</div>
         <textarea
           className="prompt"
-          placeholder="Describe the subject, action, setting, camera, lighting, and visual motion…"
+          placeholder="Describe the subject, action, setting, camera, dialogue, ambience, music, and sound effects…"
           value={prompt}
           onChange={(e) => updateClip(clip.id, { prompt: e.target.value })}
         />
-        <div className="select-desc">Generated clip audio is discarded. The original uploaded song remains the Final Cut soundtrack.</div>
+        <div className="select-desc">
+          Agnes creates the picture; the final render keeps the uploaded song on the timeline.
+        </div>
       </div>
 
       <div className="option-group">
@@ -217,9 +595,12 @@ export function Sidebar() {
               key={preset.label}
               type="button"
               className="model-chip"
-              onClick={() => updateClip(clip.id, {
-                cameraPrompt: cameraPrompt ? `${cameraPrompt}, ${preset.text}` : preset.text,
-              } as Partial<Clip>)}
+              onClick={() => {
+                const next = cameraPrompt
+                  ? `${cameraPrompt}, ${preset.text}`
+                  : preset.text;
+                updateClip(clip.id, { cameraPrompt: next } as Partial<Clip>);
+              }}
             >
               + {preset.label}
             </button>
@@ -232,14 +613,105 @@ export function Sidebar() {
         <div className="context-card">
           <div className="row"><span>Song section</span><span>{sectionLabel}</span></div>
           <div className="row"><span>Energy</span><span>{energy.toFixed(2)}</span></div>
-          <div className="row"><span>Timeline duration</span><span>{durationSec.toFixed(2)}s</span></div>
-          <div className="row"><span>Final audio</span><span>Original song</span></div>
+          <div className="row"><span>Duration</span><span>{durationSec.toFixed(2)}s / {MAX_CLIP_LEN}s</span></div>
+          <div className="row"><span>Audio</span><span>Generated or song-synced</span></div>
         </div>
       </div>
 
+      {showLipSyncPanel && (
+        <div className="option-group">
+          <div className="label">Performance lip-sync</div>
+          <div className="select-desc">
+            Uses this video as the performance reference and automatically slices the matching part of your song.
+          </div>
+          <label className="label" htmlFor="lipdub-strength">Identity / motion strength · {referenceStrength.toFixed(2)}</label>
+          <input
+            id="lipdub-strength"
+            type="range"
+            min="0.5"
+            max="1.25"
+            step="0.05"
+            value={referenceStrength}
+            onChange={(e) => setReferenceStrength(Number(e.target.value))}
+            disabled={lipSyncing}
+          />
+
+          {lipSyncProgress && (
+            <div
+              role="status"
+              aria-live="polite"
+              style={{
+                marginTop: 12,
+                padding: 12,
+                border: "1px solid rgba(255,255,255,0.12)",
+                borderRadius: 10,
+                background: "rgba(255,255,255,0.035)",
+              }}
+            >
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 12, fontSize: 12 }}>
+                <strong>
+                  {lipSyncProgress.status === "complete"
+                    ? "Complete"
+                    : lipSyncProgress.status === "failed"
+                      ? `Stopped at stage ${lipSyncProgress.stage}`
+                      : `Stage ${lipSyncProgress.stage} of ${lipSyncProgress.totalStages}`}
+                </strong>
+                <span>{lipSyncProgress.percent}%</span>
+              </div>
+              <div style={{ marginTop: 6, fontSize: 13, fontWeight: 700 }}>{lipSyncProgress.title}</div>
+              <div
+                style={{
+                  height: 8,
+                  marginTop: 10,
+                  overflow: "hidden",
+                  borderRadius: 999,
+                  background: "rgba(255,255,255,0.1)",
+                }}
+              >
+                <div
+                  style={{
+                    width: `${lipSyncProgress.percent}%`,
+                    height: "100%",
+                    borderRadius: 999,
+                    background: lipSyncProgress.status === "failed"
+                      ? "#ef4444"
+                      : lipSyncProgress.status === "complete"
+                        ? "#22c55e"
+                        : "linear-gradient(90deg, #6366f1, #a855f7)",
+                    transition: "width 700ms ease",
+                  }}
+                />
+              </div>
+              <div style={{ marginTop: 8, fontSize: 11, lineHeight: 1.45, opacity: 0.72 }}>
+                {lipSyncProgress.detail}
+              </div>
+              {lipSyncProgress.status === "running" && (
+                <div style={{ marginTop: 6, fontSize: 10, opacity: 0.5 }}>
+                  Estimated stage based on elapsed processing time. Completion is confirmed by the Agnes status polling.
+                </div>
+              )}
+            </div>
+          )}
+
+          <button
+            type="button"
+            className="generate-btn"
+            onClick={onLipSync}
+            disabled={lipSyncing || !audioUrl}
+          >
+            {lipSyncing ? "Lip-syncing with Agnes…" : "Lip-sync this clip to the song"}
+          </button>
+        </div>
+      )}
+
       {clip.status === "ready" && clip.videoUrl && (
         <div className="option-group">
-          <button type="button" className="btn ghost w-full" onClick={onExtractFrame} disabled={extracting}>
+          <button
+            type="button"
+            className="btn ghost w-full"
+            onClick={onExtractFrame}
+            disabled={extracting}
+          >
             {extracting ? "Extracting frame…" : "Save last frame as reference"}
           </button>
         </div>
@@ -283,6 +755,7 @@ export function Sidebar() {
                 generationTaskId: undefined,
                 lastError: undefined,
               });
+              setLipSyncProgress(null);
             }}
           >
             Clear clip
@@ -296,12 +769,17 @@ export function Sidebar() {
 type CanGenerate = { ok: true; reason?: string } | { ok: false; reason: string };
 
 function checkCanGenerate(
-  source: GenerationSource,
-  context: { prompt: string; selectedImage?: string },
+  source: LtxSource,
+  context: { prompt: string; selectedImage?: string; hasPrev: boolean },
 ): CanGenerate {
-  if (!context.prompt.trim()) return { ok: false, reason: "Describe the scene before generating" };
+  if (!context.prompt.trim()) {
+    return { ok: false, reason: "Describe the scene and audio before generating" };
+  }
   if (source === "imageToVideo" && !context.selectedImage) {
     return { ok: false, reason: "Select or upload a first-frame reference image" };
+  }
+  if (source === "continue" && !context.hasPrev) {
+    return { ok: false, reason: "Generate the previous clip first" };
   }
   return { ok: true };
 }
@@ -335,7 +813,14 @@ function ImageSeedGrid({
               aria-label="Select first-frame reference"
             />
             {isCustom && (
-              <button type="button" className="archetype-clear" onClick={onClear} aria-label="Remove custom reference">×</button>
+              <button
+                type="button"
+                className="archetype-clear"
+                onClick={onClear}
+                aria-label="Remove custom reference"
+              >
+                ×
+              </button>
             )}
           </div>
         );
@@ -343,7 +828,9 @@ function ImageSeedGrid({
       <AssetUploader className="archetype-tile add" onUploaded={onPick}>
         <span className="tile-add-label">+</span>
       </AssetUploader>
-      {images.length === 0 && <div className="archetype-empty">Add the first image that Agnes should animate.</div>}
+      {images.length === 0 && (
+        <div className="archetype-empty">Add the first image that Agnes should animate.</div>
+      )}
     </div>
   );
 }
@@ -352,6 +839,8 @@ function avgRms(curve: number[], start: number, end: number, duration: number): 
   if (!curve.length) return 0;
   const i0 = Math.max(0, Math.floor((start / duration) * curve.length));
   const i1 = Math.min(curve.length, Math.ceil((end / duration) * curve.length));
-  const slice = curve.slice(i0, Math.max(i0 + 1, i1));
-  return slice.reduce((sum, value) => sum + value, 0) / slice.length;
+  if (i1 <= i0) return curve[i0] ?? 0;
+  let total = 0;
+  for (let i = i0; i < i1; i++) total += curve[i] ?? 0;
+  return total / (i1 - i0);
 }

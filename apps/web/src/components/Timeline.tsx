@@ -433,7 +433,7 @@ function ClipLabel({ status, source }: { status: string; source: string }) {
     : source === "imageToVideo" || source === "archetype"
       ? "Agnes image"
       : source === "continue"
-        ? "Legacy continue"
+        ? "Agnes continue"
         : source;
   if (status === "ready") return <span>{sourceLabel}</span>;
   if (status === "empty") return <span>+ click for Agnes</span>;

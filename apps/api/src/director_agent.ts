@@ -87,8 +87,8 @@ const GeminiDirectorPlanSchema = z.object({
   shots: z.array(ShotPlanSchema).min(1).max(80),
 });
 
-export type AgnesDirectorPlan = z.infer<typeof GeminiDirectorPlanSchema> & {
-  version: "agnes-director-v1";
+export type LtxDirectorPlan = z.infer<typeof GeminiDirectorPlanSchema> & {
+  version: "ltx-director-v1";
   agentModel: string;
 };
 
@@ -178,7 +178,7 @@ function wordCount(text: string): number {
 
 function systemInstruction(): string {
   return [
-    "You are an expert music-video director and an Agnes Video V2.0 prompt engineer.",
+    "You are an expert music-video director and an Agnes prompt engineer.",
     "Create a production plan for the exact timeline clips supplied by the application.",
     "Return one and only one shot for every supplied clipId. Never invent, omit, merge, or rename clip IDs.",
     "Agnes prompts must be one flowing paragraph, chronological, literal, visually observable, and no more than 190 words.",
@@ -189,13 +189,13 @@ function systemInstruction(): string {
     "Repeat important immutable facial, hair, wardrobe, and accessory traits naturally inside character-shot prompts when a character reference is available.",
     "Use uploaded style, location, and shot references as visual evidence. Use notes as requirements, not as optional inspiration.",
     "Respect the user's must-include and avoid instructions exactly.",
-    "Timeline clips are analysis-defined musical sections with exact supplied start/end times. They may be shorter or longer than five seconds; preserve every supplied boundary because the application handles Agnes provider-sized sub-generations internally.",
+    "The plan must be practical for independent 1-to-5-second Agnes clips that are later edited together.",
   ].join(" ");
 }
 
 function requestContext(req: DirectorPlanRequest, references: PreparedReference[]): string {
   return JSON.stringify({
-    task: "Create the final editable Agnes Video V2.0 treatment, character bible, and clip-by-clip production prompts.",
+    task: "Create the final editable Agnes treatment, character bible, and clip-by-clip production prompts.",
     song: {
       id: req.songId,
       filename: req.songFilename,
@@ -369,16 +369,16 @@ async function callGemini(parts: GeminiPart[], model: string): Promise<unknown> 
   return JSON.parse(text);
 }
 
-export async function createDirectorPlan(rawRequest: unknown): Promise<AgnesDirectorPlan> {
+export async function createDirectorPlan(rawRequest: unknown): Promise<LtxDirectorPlan> {
   if (!config.GEMINI_API_KEY) {
-    throw new Error("GEMINI_API_KEY is not configured in Render. The Director Agent cannot use a fallback planner.");
+    throw new Error("GEMINI_API_KEY is not configured in Render. The Agnes Director Agent cannot use a fallback planner.");
   }
 
   const req = DirectorPlanRequestSchema.parse(rawRequest);
   const references = prepareReferences(req);
   const characterReferences = references.filter((reference) => reference.kind === "character" && reference.anchorUrl);
   if (req.characterRequired && characterReferences.length === 0) {
-    throw new Error("Character conditioning is required. Add or approve a character reference before asking the Director Agent to plan the video.");
+    throw new Error("Character conditioning is required. Add or approve a character reference before asking the Agnes Director Agent to plan the video.");
   }
 
   const parts: GeminiPart[] = [{ text: requestContext(req, references) }];
@@ -425,7 +425,7 @@ export async function createDirectorPlan(rawRequest: unknown): Promise<AgnesDire
       if (lastIssues.length === 0) {
         return {
           ...parsed.data,
-          version: "agnes-director-v1",
+          version: "ltx-director-v1",
           agentModel: model,
         };
       }

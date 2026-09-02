@@ -82,7 +82,7 @@ function parseJsonObject(text: string): unknown {
 
 function systemInstruction(): string {
   return [
-    "You are the conversational editing mode of an Agnes-based music-video Director.",
+    "You are the conversational editing mode of an Agnes music-video Director.",
     "The user is editing an existing plan, not asking for a new plan.",
     "Return JSON only with shape: { reply: string, actions: DirectorEditAction[] }.",
     "Allowed actions are update_clip, edit_scene_image, and edit_shot_image.",
