@@ -10,8 +10,8 @@ import {
 import { toast } from "./toast.js";
 import type { Clip, GenerationModel, Task } from "@mvs/shared";
 
-/** Keep a small queue so one project does not launch an accidental GPU storm. */
-export const MAX_CONCURRENT = 2;
+/** Agnes currently executes one video request per minute on this account, so serialize launches. */
+export const MAX_CONCURRENT = 1;
 
 export type JobState = "queued" | "running" | "succeeded" | "failed" | "cancelled";
 export type LtxGenerationSource = "textToVideo" | "imageToVideo" | "continue";
