@@ -12,9 +12,6 @@ function run(command, args) {
 
 await run("tsc", ["-p", "tsconfig.json"]);
 
-// Keep the Gemini request on the smallest generateContent surface that the
-// deployed v1beta endpoint accepts. The Director validates returned JSON with
-// Zod, so structured-output request configuration is not required here.
 const directorDistPath = resolve(process.cwd(), "dist/director_agent.js");
 let directorDist = await readFile(directorDistPath, "utf8");
 directorDist = directorDist.replace(/\s*temperature:\s*0\.35,\s*/g, "\n");
@@ -41,11 +38,8 @@ for (const structuredOutputConfig of [legacyJsonSchemaConfig, legacyResponseSche
 
 const oldPartsInit = `const parts = [{ text: requestContext(req, references) }];`;
 const schemaPromptPartsInit = `const parts = [{ text: requestContext(req, references) + "\\n\\nReturn ONLY valid JSON with no markdown fences or commentary. Match this JSON Schema exactly:\\n" + JSON.stringify(RESPONSE_SCHEMA) }];`;
-if (directorDist.includes(oldPartsInit)) {
-  directorDist = directorDist.replace(oldPartsInit, schemaPromptPartsInit);
-} else if (!directorDist.includes("Match this JSON Schema exactly")) {
-  throw new Error("Could not find the compiled Gemini Director prompt initialization.");
-}
+if (directorDist.includes(oldPartsInit)) directorDist = directorDist.replace(oldPartsInit, schemaPromptPartsInit);
+else if (!directorDist.includes("Match this JSON Schema exactly")) throw new Error("Could not find the compiled Gemini Director prompt initialization.");
 
 const oldJsonParse = `parsedJson = JSON.parse(responseText);`;
 const tolerantJsonParse = 'parsedJson = JSON.parse(responseText.replace(/^```(?:json)?\\s*/i, "").replace(/\\s*```$/, "").trim());';
@@ -73,12 +67,17 @@ const detailedErrorParser = `let message = text;
         }`;
 if (directorDist.includes(oldErrorParser)) directorDist = directorDist.replace(oldErrorParser, detailedErrorParser);
 
-// The Director source is compiled first, then this build step applies the
-// production request contract. Wire transient Gemini capacity handling here so
-// the deployed artifact retries 429/503/high-demand/network timeouts and can
-// fall back to the stable Gemini 2.5 Flash model without changing user plans.
+const clipDirectionAnchor = `sectionLabel: z.string().optional(),`;
+const clipDirectionFields = `${clipDirectionAnchor}\n    userDirection: z.string().optional(),`;
+if (!directorDist.includes("userDirection: z.string().optional()")) {
+  if (!directorDist.includes(clipDirectionAnchor)) throw new Error("Could not find Director clip schema sectionLabel field.");
+  directorDist = directorDist.replace(clipDirectionAnchor, clipDirectionFields);
+}
+
 const resilienceImport = `import { runGeminiDirectorWithFallback } from "./gemini_director_retry.js";`;
+const localFallbackImport = `import { buildLocalDirectorPlan } from "./director_local_plan.js";`;
 if (!directorDist.includes(resilienceImport)) directorDist = `${resilienceImport}\n${directorDist}`;
+if (!directorDist.includes(localFallbackImport)) directorDist = `${localFallbackImport}\n${directorDist}`;
 
 const legacyGeminiError = 'throw new Error(`Gemini Director failed: ${message.slice(0, 800)}`);';
 const statusAwareGeminiError = 'throw new Error(`Gemini Director failed (${response.status}): ${message.slice(0, 800)}`);';
@@ -93,8 +92,8 @@ if (!directorDist.includes("let successfulModel = model;")) {
 }
 
 const directGeminiCall = `const response = await callGemini(attemptParts, model);`;
-const resilientGeminiCall = `const resilientGemini = await runGeminiDirectorWithFallback(model, (candidateModel) => callGemini(attemptParts, candidateModel));\n        const response = resilientGemini.value;\n        successfulModel = resilientGemini.model;`;
-if (!directorDist.includes("runGeminiDirectorWithFallback(model")) {
+const resilientGeminiCall = `let resilientGemini;\n        try {\n            resilientGemini = await runGeminiDirectorWithFallback(model, (candidateModel) => callGemini(attemptParts, candidateModel));\n        }\n        catch (error) {\n            console.warn("[Director] Gemini unavailable after retries; using local-vision-fallback", error instanceof Error ? error.message : String(error));\n            return buildLocalDirectorPlan(req, references);\n        }\n        const response = resilientGemini.value;\n        successfulModel = resilientGemini.model;`;
+if (!directorDist.includes("using local-vision-fallback")) {
   if (!directorDist.includes(directGeminiCall)) throw new Error("Could not find direct Gemini Director call.");
   directorDist = directorDist.replace(directGeminiCall, resilientGeminiCall);
 }
@@ -117,11 +116,10 @@ if (directorDist.includes("AbortSignal.timeout(180_000)")) throw new Error("Gemi
 if (!directorDist.includes("AbortSignal.timeout(600_000)")) throw new Error("Gemini Director build is missing the ten-minute planning timeout.");
 if (directorDist.includes("1-to-5-second Agnes clips")) throw new Error("Gemini Director prompt still assumes five-second timeline clips.");
 if (!directorDist.includes("runGeminiDirectorWithFallback(model")) throw new Error("Gemini Director build is missing transient-capacity retry/fallback handling.");
+if (!directorDist.includes("buildLocalDirectorPlan(req, references)")) throw new Error("Gemini Director build is missing the local Vision fallback.");
+if (!directorDist.includes("userDirection: z.string().optional()")) throw new Error("Gemini Director build is stripping Vision clip directions.");
 await writeFile(directorDistPath, directorDist, "utf8");
 
-// Register routes whose implementation files are compiled by tsc but are kept
-// isolated from the legacy one-line server source. Dynamic imports keep this
-// patch small and make missing route wiring fail loudly during the build.
 const serverDistPath = resolve(process.cwd(), "dist/server.js");
 let serverDist = await readFile(serverDistPath, "utf8");
 const routeAnchor = `function sniffMatches(buf, family) {`;
@@ -156,4 +154,4 @@ if (!serverDist.includes('/api/videos/stitch')) throw new Error("Compiled API is
 if (!serverDist.includes('/api/social/export')) throw new Error("Compiled API is missing /api/social/export.");
 await writeFile(serverDistPath, serverDist, "utf8");
 
-console.log("[api build] Compiled Director planning/chat with Gemini capacity retries/fallback, analyzer-length sections, long-section stitching, social exports, and ten-minute planning timeout.");
+console.log("[api build] Compiled Director planning/chat with Gemini retries plus local Vision fallback, analyzer-length sections, long-section stitching, social exports, and ten-minute planning timeout.");
