@@ -20,5 +20,7 @@ jobs:
           cache: npm
       - name: Install dependencies
         run: npm ci
+      - name: Agnes regression tests
+        run: npx tsx --test apps/api/src/agnes_core.test.ts apps/api/src/agnes_http.test.ts apps/api/src/agnes_routes.test.ts
       - name: Build workspaces
         run: npm run build
