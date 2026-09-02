@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildVisionTimelineClips } from "./directorAgentVision.js";
+import { buildVisionTimelineClips, DIRECTOR_CLIP_COUNT_STORAGE_KEY } from "./directorAgentVision.js";
 
 const VISION = `
 0:00 – 0:10 Shot 1: Intro
@@ -41,4 +41,19 @@ test("editable clip count can reduce a structured Vision by combining adjacent d
 test("clip count is clamped to the supported 1 to 80 range", () => {
   assert.equal(buildVisionTimelineClips(VISION, analyzerClips, 0).length, 1);
   assert.equal(buildVisionTimelineClips(VISION, analyzerClips, 999).length, 80);
+});
+
+test("persisted left-rail clip amount drives the active Director call", () => {
+  const previousWindow = (globalThis as any).window;
+  (globalThis as any).window = {
+    localStorage: {
+      getItem: (key: string) => key === DIRECTOR_CLIP_COUNT_STORAGE_KEY ? "6" : null,
+    },
+  };
+  try {
+    assert.equal(buildVisionTimelineClips(VISION, analyzerClips).length, 6);
+  } finally {
+    if (previousWindow === undefined) delete (globalThis as any).window;
+    else (globalThis as any).window = previousWindow;
+  }
 });
