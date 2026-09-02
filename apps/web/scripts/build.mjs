@@ -7,6 +7,7 @@ import { patchDirectorEditing } from "./director-edit-patch.mjs";
 import { patchDirectorAgentRuntime, patchDirectorReferenceChat } from "./director-agent-runtime-patch.mjs";
 import { patchOptionalCharacterConditioning } from "./optional-character-conditioning.patch.mjs";
 import { patchDirectorChat } from "./director-chat-patch.mjs";
+import { patchDirectorMultiCharacter } from "./director-multichar.patch.mjs";
 import { patchAnalyzerDefinedClips, patchLongSectionApi, patchLongSectionScheduler } from "./analyzer-section-workflow.patch.mjs";
 import { patchDirectorAssetPersistence } from "./director-assets.patch.mjs";
 import { patchSocialExport } from "./social-export.patch.mjs";
@@ -87,6 +88,7 @@ const patchedStore = patchAnalyzerDefinedClips(originalStore);
 let patchedAgent = patchOptionalCharacterConditioning(originalAgent, replaceRequired);
 patchedAgent = patchDirectorChat(patchedAgent, replaceRequired);
 patchedAgent = patchDirectorLeftRailLauncher(patchedAgent, replaceRequired);
+patchedAgent = patchDirectorMultiCharacter(patchedAgent, replaceRequired);
 let patchedReferenceChat = patchDirectorReferenceChat(originalReferenceChat, replaceRequired);
 patchedReferenceChat = patchDirectorAssetPersistence(patchedReferenceChat);
 patchedReferenceChat = patchReferenceLeftRailLauncher(patchedReferenceChat);
@@ -111,6 +113,7 @@ try {
   await writeFile(promoPath, patchedPromo, "utf8");
   console.log("[web build] Moved Director, References, and Promo launchers into the left rail so the timeline stays clear.");
   console.log("[web build] Enabled Director chat, reusable assets, and section-by-section credit-protected approval.");
+  console.log("[web build] Enabled Director session v4 multi-character approvals and legacy migration.");
   await run("tsc", ["--noEmit"]);
   await run("vite", ["build"]);
 } finally {

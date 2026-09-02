@@ -39,9 +39,64 @@ test("untargeted local chat fails safely with no actions instead of inventing cl
   assert.match(result.reply, /clip|shot/i);
 });
 
-test("Director chat source uses Gemini retries and local fallback", async () => {
+test("locked clip chat works without naming a clip number", () => {
+  assert.ok(localChatModule);
+  const result = localChatModule!.buildLocalDirectorChatResponse({
+    message: "make it a dramatic low-angle orbit",
+    target: { type: "clip", clipId: "clip-b" },
+    plan,
+  });
+  assert.equal(result.actions.length, 1);
+  assert.equal(result.actions[0]?.type, "update_clip");
+  assert.equal(result.actions[0]?.clipId, "clip-b");
+  assert.doesNotMatch(JSON.stringify(result.actions[0]), /start|end/);
+});
+
+test("locked shot-image chat produces only the requested shot-image action", () => {
+  assert.ok(localChatModule);
+  const result = localChatModule!.buildLocalDirectorChatResponse({
+    message: "make the lighting warmer",
+    target: { type: "shot_image", clipId: "clip-a" },
+    plan,
+  });
+  assert.deepEqual(result.actions.map((action: any) => [action.type, action.clipId]), [["edit_shot_image", "clip-a"]]);
+});
+
+test("locked scene-image chat produces only the requested scene-image action", () => {
+  assert.ok(localChatModule);
+  const result = localChatModule!.buildLocalDirectorChatResponse({
+    message: "remove the car",
+    target: { type: "scene_image", clipId: "clip-b" },
+    plan,
+  });
+  assert.deepEqual(result.actions.map((action: any) => [action.type, action.clipId]), [["edit_scene_image", "clip-b"]]);
+});
+
+test("invalid locked targets fail safely", () => {
+  assert.ok(localChatModule);
+  const result = localChatModule!.buildLocalDirectorChatResponse({
+    message: "make it darker",
+    target: { type: "clip", clipId: "missing" },
+    plan,
+  });
+  assert.deepEqual(result.actions, []);
+});
+
+test("locked chat still refuses timing edits", () => {
+  assert.ok(localChatModule);
+  const result = localChatModule!.buildLocalDirectorChatResponse({
+    message: "extend this clip to 10 seconds",
+    target: { type: "clip", clipId: "clip-a" },
+    plan,
+  });
+  assert.deepEqual(result.actions, []);
+});
+
+test("Director chat source uses Gemini retries, local fallback, and locked targets", async () => {
   const source = await readFile(new URL("./director_chat.ts", import.meta.url), "utf8");
   assert.match(source, /runGeminiDirectorWithFallback/);
   assert.match(source, /buildLocalDirectorChatResponse/);
   assert.match(source, /response\.status/);
+  assert.match(source, /DirectorChatTargetSchema/);
+  assert.match(source, /req\.target/);
 });

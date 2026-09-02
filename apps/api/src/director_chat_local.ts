@@ -8,9 +8,15 @@ export type LocalDirectorChatShot = {
   transition?: string;
 };
 
+export type LocalDirectorChatTarget = {
+  type: "scene_image" | "shot_image" | "clip";
+  clipId: string;
+};
+
 export type LocalDirectorChatRequest = {
   message: string;
   plan: { shots: LocalDirectorChatShot[] };
+  target?: LocalDirectorChatTarget;
 };
 
 export type LocalDirectorChatAction =
@@ -65,6 +71,10 @@ function promptWithEdit(shot: LocalDirectorChatShot, message: string): string {
   return `${base} User-requested edit: ${edit}`.slice(0, 6000);
 }
 
+function imagePrompt(message: string): string {
+  return `Preserve the existing approved composition and identity. Apply only this user-requested visual edit: ${message}`.slice(0, 6000);
+}
+
 function imageActionType(message: string): "edit_scene_image" | "edit_shot_image" | null {
   if (/\bscene\s+image\b/i.test(message)) return "edit_scene_image";
   if (/\bshot\s+image\b/i.test(message) || /\bimage\b/i.test(message)) return "edit_shot_image";
@@ -79,6 +89,32 @@ export function buildLocalDirectorChatResponse(req: LocalDirectorChatRequest): L
     return {
       reply: "Local Director mode is active because the AI chat provider is unavailable. I will not change clip timing from chat; use the timeline or clip-count control for timing changes.",
       actions: [],
+    };
+  }
+
+  if (req.target) {
+    const shot = shots.find((item) => item.clipId === req.target!.clipId);
+    if (!shot) {
+      return {
+        reply: "The locked Director asset target is no longer present in the current plan, so nothing was changed.",
+        actions: [],
+      };
+    }
+
+    let action: LocalDirectorChatAction;
+    if (req.target.type === "scene_image") {
+      action = { type: "edit_scene_image", clipId: shot.clipId, prompt: imagePrompt(message) };
+    } else if (req.target.type === "shot_image") {
+      action = { type: "edit_shot_image", clipId: shot.clipId, prompt: imagePrompt(message) };
+    } else if (REGEN_RE.test(message)) {
+      action = { type: "update_clip", clipId: shot.clipId, regenerate: true };
+    } else {
+      action = { type: "update_clip", clipId: shot.clipId, prompt: promptWithEdit(shot, message), regenerate: false };
+    }
+
+    return {
+      reply: `Local Director mode prepared your edit for ${shot.sectionLabel || shot.clipId}. Timing and every other asset were left unchanged.`,
+      actions: [action],
     };
   }
 
@@ -101,22 +137,9 @@ export function buildLocalDirectorChatResponse(req: LocalDirectorChatRequest): L
   const imageType = imageActionType(message);
   const actions: LocalDirectorChatAction[] = targetIndexes.map((index) => {
     const shot = shots[index]!;
-    if (imageType) {
-      return {
-        type: imageType,
-        clipId: shot.clipId,
-        prompt: `Preserve the existing approved composition and identity. Apply only this user-requested visual edit: ${message}`.slice(0, 6000),
-      };
-    }
-    if (regenerate) {
-      return { type: "update_clip", clipId: shot.clipId, regenerate: true };
-    }
-    return {
-      type: "update_clip",
-      clipId: shot.clipId,
-      prompt: promptWithEdit(shot, message),
-      regenerate: false,
-    };
+    if (imageType) return { type: imageType, clipId: shot.clipId, prompt: imagePrompt(message) };
+    if (regenerate) return { type: "update_clip", clipId: shot.clipId, regenerate: true };
+    return { type: "update_clip", clipId: shot.clipId, prompt: promptWithEdit(shot, message), regenerate: false };
   });
 
   const targetLabel = targetIndexes.length === 1 ? `clip ${targetIndexes[0]! + 1}` : `${targetIndexes.length} targeted clips`;
