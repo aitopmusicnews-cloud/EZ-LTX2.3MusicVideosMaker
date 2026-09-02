@@ -1,18 +1,6 @@
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
-
-export type DirectorEditAction =
-  | {
-      type: "update_clip";
-      clipId: string;
-      prompt?: string;
-      continuityNotes?: string;
-      transition?: string;
-      sectionLabel?: string;
-      requiresCharacter?: boolean;
-      conditioningReferenceId?: string | null;
-      regenerate?: boolean;
-    }
-  | { type: "edit_scene_image" | "edit_shot_image"; clipId: string; prompt: string };
+import { requestDirectorChat, type DirectorEditAction } from "../lib/directorChatClient.js";
+export type { DirectorEditAction } from "../lib/directorChatClient.js";
 
 type ChatMessage = { role: "user" | "director"; text: string };
 
@@ -54,18 +42,9 @@ export function DirectorEditChat({ plan, references, sceneImages, shotImages, di
     setMessages((current) => [...current, { role: "user", text: message }]);
     setPending(true);
     try {
-      const response = await fetch("/api/director/chat", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ message, plan, references, sceneImages, shotImages, history }),
-      });
-      const text = await response.text();
-      let data: any = null;
-      try { data = JSON.parse(text); } catch {}
-      if (!response.ok) throw new Error(data?.error || text.slice(0, 800) || `Director chat failed (${response.status})`);
-      const actions = Array.isArray(data?.actions) ? data.actions as DirectorEditAction[] : [];
-      if (actions.length) await onApply(actions);
-      setMessages((current) => [...current, { role: "director", text: String(data?.reply || (actions.length ? "Done." : "I did not make any changes.")) }]);
+      const result = await requestDirectorChat({ message, plan, references, sceneImages, shotImages, history });
+      if (result.actions.length) await onApply(result.actions);
+      setMessages((current) => [...current, { role: "director", text: result.reply }]);
     } catch (failure) {
       const messageText = failure instanceof Error ? failure.message : String(failure);
       setError(messageText);
@@ -96,7 +75,7 @@ export function DirectorEditChat({ plan, references, sceneImages, shotImages, di
       />
       <button type="button" className="btn primary" onClick={() => void send()} disabled={pending || disabled || draft.trim().length < 2}>{pending ? "Director is editing…" : "Send to Director"}</button>
     </div>
-    <div style={shortcutStyle}>⌘/Ctrl + Enter to send · visual changes reset preview approval before any new video credits are spent.</div>
+    <div style={shortcutStyle}>⌘/Ctrl + Enter to send · chat changes do not spend provider credits by themselves.</div>
   </section>;
 }
 
