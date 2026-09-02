@@ -88,6 +88,6 @@ export function patchDirectorReferenceChat(source, replaceRequired) {
     source,
     `  useEffect(() => {\n    if (!songId) return;\n    localStorage.setItem(storageKey(songId), JSON.stringify(items));\n  }, [items, songId]);\n\n  if (!songId) return null;`,
     listener,
-    "open Reference Chat from LTX Director Agent",
+    "open Reference Chat from Agnes Director Agent",
   );
 }

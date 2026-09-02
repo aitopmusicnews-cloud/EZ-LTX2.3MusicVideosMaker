@@ -7,10 +7,10 @@ export function getErrorMessage(err: unknown): string {
 }
 
 export function modelSupportsBridge(model: string): boolean {
-  return model === "ltx-video" || model === "runway-gen3";
+  return model === "agnes-video-v2.0" || model === "runway-gen3";
 }
 
-export type GenerationModel = "ltx-video" | "runway-gen3" | "wan2.1" | "hunyuan" | string;
+export type GenerationModel = "agnes-video-v2.0" | "runway-gen3" | "wan2.1" | "hunyuan" | string;
 export type TextToImageModel = "sdxl" | "flux" | "wan2.1" | "openrouter_image_ultra" | "openrouter_image_flash" | "local_wan21_image" | "gpt_image_2" | "gemini_image3_pro" | string;
 export type TextToImageRatio = "16:9" | "9:16" | "1:1" | "4:3" | string;
 

@@ -178,10 +178,10 @@ function wordCount(text: string): number {
 
 function systemInstruction(): string {
   return [
-    "You are an expert music-video director and an LTX-2.3 prompt engineer.",
+    "You are an expert music-video director and an Agnes prompt engineer.",
     "Create a production plan for the exact timeline clips supplied by the application.",
     "Return one and only one shot for every supplied clipId. Never invent, omit, merge, or rename clip IDs.",
-    "LTX prompts must be one flowing paragraph, chronological, literal, visually observable, and no more than 190 words.",
+    "Agnes prompts must be one flowing paragraph, chronological, literal, visually observable, and no more than 190 words.",
     "Each prompt must start directly with the visible action, then describe gestures, exact character appearance, environment, camera framing and movement, lighting, color, and visible changes during the shot.",
     "Do not use abstract marketing language, screenplay headings, bullet points, dialogue formatting, or unsupported model parameters inside prompts.",
     "Character continuity is an asset-conditioning problem, not a promise in prose. Set requiresCharacter=true only when a real character reference ID is supplied and the shot should use it; otherwise set requiresCharacter=false and conditioningReferenceId=null.",
@@ -189,13 +189,13 @@ function systemInstruction(): string {
     "Repeat important immutable facial, hair, wardrobe, and accessory traits naturally inside character-shot prompts when a character reference is available.",
     "Use uploaded style, location, and shot references as visual evidence. Use notes as requirements, not as optional inspiration.",
     "Respect the user's must-include and avoid instructions exactly.",
-    "The plan must be practical for independent 1-to-5-second LTX clips that are later edited together.",
+    "The plan must be practical for independent 1-to-5-second Agnes clips that are later edited together.",
   ].join(" ");
 }
 
 function requestContext(req: DirectorPlanRequest, references: PreparedReference[]): string {
   return JSON.stringify({
-    task: "Create the final editable LTX-2.3 treatment, character bible, and clip-by-clip production prompts.",
+    task: "Create the final editable Agnes treatment, character bible, and clip-by-clip production prompts.",
     song: {
       id: req.songId,
       filename: req.songFilename,
@@ -371,14 +371,14 @@ async function callGemini(parts: GeminiPart[], model: string): Promise<unknown> 
 
 export async function createDirectorPlan(rawRequest: unknown): Promise<LtxDirectorPlan> {
   if (!config.GEMINI_API_KEY) {
-    throw new Error("GEMINI_API_KEY is not configured in Render. The LTX Director Agent cannot use a fallback planner.");
+    throw new Error("GEMINI_API_KEY is not configured in Render. The Agnes Director Agent cannot use a fallback planner.");
   }
 
   const req = DirectorPlanRequestSchema.parse(rawRequest);
   const references = prepareReferences(req);
   const characterReferences = references.filter((reference) => reference.kind === "character" && reference.anchorUrl);
   if (req.characterRequired && characterReferences.length === 0) {
-    throw new Error("Character conditioning is required. Add or approve a character reference before asking the LTX Director Agent to plan the video.");
+    throw new Error("Character conditioning is required. Add or approve a character reference before asking the Agnes Director Agent to plan the video.");
   }
 
   const parts: GeminiPart[] = [{ text: requestContext(req, references) }];
@@ -438,5 +438,5 @@ export async function createDirectorPlan(rawRequest: unknown): Promise<LtxDirect
     ].join("\n");
   }
 
-  throw new Error(`Gemini Director could not produce a valid LTX plan: ${lastIssues.join("; ")}`);
+  throw new Error(`Gemini Director could not produce a valid Agnes plan: ${lastIssues.join("; ")}`);
 }

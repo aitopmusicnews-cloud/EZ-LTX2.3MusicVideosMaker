@@ -55,7 +55,7 @@ function normalizeLtxClips(clips: Clip[]): Clip[] {
     if (clip.source === "imageToVideo" || clip.source === "archetype") source = "imageToVideo";
     else if (clip.source === "continue" && index > 0) source = "continue";
     else source = "textToVideo";
-    return { ...clip, source, model: "ltx-video" };
+    return { ...clip, source, model: "agnes-video-v2.0" };
   });
 }
 
@@ -252,7 +252,7 @@ export const useStore = create<State>()(
 
       loadSong: (songId, audioUrl, analysis, filename) => {
         const clips = analysis.sections.flatMap((s) => subdivideSection(s, analysis.beats));
-        if (clips[0]) clips[0] = { ...clips[0], source: "textToVideo", model: "ltx-video" };
+        if (clips[0]) clips[0] = { ...clips[0], source: "textToVideo", model: "agnes-video-v2.0" };
         set({
           projectId: get().projectId ?? `proj-${crypto.randomUUID().slice(0, 8)}`,
           songId,

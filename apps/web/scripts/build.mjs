@@ -99,7 +99,7 @@ try {
   await writeFile(apiPath, patchedApi, "utf8");
   await writeFile(schedulerPath, patchedScheduler, "utf8");
   await writeFile(storePath, patchedStore, "utf8");
-  console.log("[web build] Analyzer sections now define timeline clip lengths; long sections generate internally in LTX-sized segments.");
+  console.log("[web build] Analyzer sections now define timeline clip lengths; long sections generate internally in Agnes-sized segments.");
   await writeFile(agentPath, patchedAgent, "utf8");
   await writeFile(referenceChatPath, patchedReferenceChat, "utf8");
   await writeFile(leftRailPath, patchedLeftRail, "utf8");

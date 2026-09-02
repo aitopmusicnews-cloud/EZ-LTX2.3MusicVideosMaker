@@ -29,13 +29,13 @@ const LIP_SYNC_STAGES = [
     afterMs: 0,
     percent: 5,
     title: "Submitting LipDub job",
-    detail: "Sending the performance clip and matching song section to Render.",
+    detail: "Sending the performance reference and matching song section to Agnes.",
   },
   {
     afterMs: 3_000,
     percent: 12,
-    title: "Starting Modal GPU",
-    detail: "Waiting for an A100 worker and validating the cached LTX-2.3 models.",
+    title: "Starting Agnes API",
+    detail: "Waiting for Agnes to accept the audio-reference generation task.",
   },
   {
     afterMs: 20_000,
@@ -46,20 +46,20 @@ const LIP_SYNC_STAGES = [
   {
     afterMs: 45_000,
     percent: 36,
-    title: "Loading Gemma",
-    detail: "Building the text encoder and creating prompt conditioning.",
+    title: "Building direction",
+    detail: "Preparing the visual identity, prompt, and song-reference conditioning.",
   },
   {
     afterMs: 90_000,
     percent: 50,
     title: "Analyzing the performance",
-    detail: "Encoding the face, mouth movement, reference video, and replacement audio.",
+    detail: "Combining the extracted performance frame with the matching song reference.",
   },
   {
     afterMs: 150_000,
     percent: 64,
     title: "LipDub generation · pass 1",
-    detail: "Generating synchronized facial and mouth movement from the vocal performance.",
+    detail: "Generating audio-guided facial and performance motion from the references.",
   },
   {
     afterMs: 300_000,
@@ -71,13 +71,13 @@ const LIP_SYNC_STAGES = [
     afterMs: 480_000,
     percent: 90,
     title: "Rendering the video",
-    detail: "Decoding frames, combining the synchronized audio, and writing the MP4.",
+    detail: "Rendering the generated performance video.",
   },
   {
     afterMs: 720_000,
     percent: 96,
     title: "Finalizing",
-    detail: "Uploading the finished clip and waiting for the completion callback.",
+    detail: "Waiting for Agnes to publish the finished clip.",
   },
 ] as const;
 
@@ -85,12 +85,12 @@ const SOURCES: Array<{ value: LtxSource; label: string; desc: string }> = [
   {
     value: "textToVideo",
     label: "Text → Video",
-    desc: "Create synchronized video and audio directly from one scene prompt.",
+    desc: "Create a video directly from one scene prompt.",
   },
   {
     value: "imageToVideo",
     label: "Image → Video",
-    desc: "Animate a reference frame while LTX-2.3 generates matching motion and audio.",
+    desc: "Animate a reference frame while Agnes generates matching motion.",
   },
   {
     value: "continue",
@@ -131,7 +131,7 @@ function estimatedLipSyncProgress(elapsedMs: number): LipSyncProgress {
 
   const current = LIP_SYNC_STAGES[index]!;
   const next = LIP_SYNC_STAGES[index + 1];
-  let percent = current.percent;
+  let percent: number = current.percent;
   if (next) {
     const span = Math.max(1, next.afterMs - current.afterMs);
     const fraction = Math.min(1, Math.max(0, (elapsedMs - current.afterMs) / span));
@@ -172,7 +172,7 @@ export function Sidebar() {
 
   useEffect(() => {
     if (clip && clip.source !== source && clip.status !== "ready" && clip.source !== "lipSync") {
-      updateClip(clip.id, { source, model: "ltx-video" });
+      updateClip(clip.id, { source, model: "agnes-video-v2.0" });
     }
   }, [clip?.id, clip?.source, clip?.status, source, updateClip]);
 
@@ -195,7 +195,7 @@ export function Sidebar() {
   const setSource = (next: LtxSource) => {
     updateClip(clip.id, {
       source: next,
-      model: "ltx-video",
+      model: "agnes-video-v2.0",
       lastError: undefined,
     });
   };
@@ -231,7 +231,7 @@ export function Sidebar() {
       duration: durationSec,
       sectionLabel,
       energy,
-      model: "ltx-video",
+      model: "agnes-video-v2.0",
     });
   };
 
@@ -297,13 +297,13 @@ export function Sidebar() {
     updateClip(clip.id, {
       status: "generating",
       source: "imageToVideo",
-      model: "ltx-2.3-a2vid",
+      model: "agnes-video-2.5-flash",
       generationTaskId: undefined,
       lastError: undefined,
     });
 
     try {
-      toast.info("Starting the audio-driven LTX-2.3 performance…");
+      toast.info("Starting the audio-driven Agnes performance…");
       const task = await startPerformance({
         imageUrl: selectedImage,
         audioUrl,
@@ -327,7 +327,7 @@ export function Sidebar() {
       updateClip(clip.id, {
         videoUrl: outputUrl,
         source: "imageToVideo",
-        model: "ltx-2.3-a2vid",
+        model: "agnes-video-2.5-flash",
         status: "ready",
         generationTaskId: undefined,
         lastError: undefined,
@@ -392,7 +392,7 @@ export function Sidebar() {
         audioEnd: clip.end,
         promptText: prompt.trim() || "The performer sings naturally to the supplied vocal performance with accurate mouth movement and stable identity.",
         referenceStrength,
-        model: "ltx-2.3-lipdub",
+        model: "agnes-video-2.5-flash",
       });
       updateClip(clip.id, { generationTaskId: task.id });
 
@@ -413,12 +413,12 @@ export function Sidebar() {
       updateClip(clip.id, {
         videoUrl: outputUrl,
         source: "lipSync",
-        model: "ltx-2.3-lipdub",
+        model: "agnes-video-2.5-flash",
         status: "ready",
         generationTaskId: undefined,
         lastError: undefined,
       });
-      toast.success("LTX-2.3 LipDub clip ready");
+      toast.success("Agnes LipDub clip ready");
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       setLipSyncProgress((current) => ({
@@ -469,13 +469,13 @@ export function Sidebar() {
   return (
     <>
       <div className="sidebar-header-row">
-        <span className="pill">LTX-2.3</span>
+        <span className="pill">Agnes</span>
         <span className="meta">{durationSec.toFixed(1)}s · {clip.id}</span>
       </div>
 
       <div className="ltx-engine-card">
         <div className="ltx-engine-title">Complete Music Video Stack</div>
-        <div className="ltx-engine-meta">LTX-2.3 video + audio · character frames · LipDub · Modal GPU</div>
+        <div className="ltx-engine-meta">Agnes video + audio · character frames · LipDub · Agnes API</div>
       </div>
 
       <div className="option-group">
@@ -525,14 +525,14 @@ export function Sidebar() {
             onPick={(url) => updateClip(clip.id, { archetypeUrl: url })}
             onClear={() => updateClip(clip.id, { archetypeUrl: undefined })}
           />
-          <div className="select-desc">Upload, generate, or select one image. LTX-2.3 animates it as frame one.</div>
+          <div className="select-desc">Upload, generate, or select one image. Agnes animates it as frame one.</div>
         </div>
       )}
       {source === "imageToVideo" && (
         <div className="option-group">
           <div className="label">Singing performance from image + song</div>
           <div className="select-desc">
-            Uses the selected artist image and this clip's exact song section with LTX-2.3 A2Vid. This creates a new performance; it does not require an existing video.
+            Uses the selected artist image and this clip's exact song section with Agnes A2Vid. This creates a new performance; it does not require an existing video.
           </div>
           <label style={{ display: "flex", gap: 8, alignItems: "flex-start", fontSize: 12 }}>
             <input
@@ -577,7 +577,7 @@ export function Sidebar() {
           onChange={(e) => updateClip(clip.id, { prompt: e.target.value })}
         />
         <div className="select-desc">
-          LTX-2.3 creates picture and sound together. Include dialogue in quotes and describe ambience or effects explicitly.
+          Agnes creates the picture; the final render keeps the uploaded song on the timeline.
         </div>
       </div>
 
@@ -687,7 +687,7 @@ export function Sidebar() {
               </div>
               {lipSyncProgress.status === "running" && (
                 <div style={{ marginTop: 6, fontSize: 10, opacity: 0.5 }}>
-                  Estimated stage based on elapsed processing time. Completion is confirmed by the Modal callback.
+                  Estimated stage based on elapsed processing time. Completion is confirmed by the Agnes status polling.
                 </div>
               )}
             </div>
@@ -699,7 +699,7 @@ export function Sidebar() {
             onClick={onLipSync}
             disabled={lipSyncing || !audioUrl}
           >
-            {lipSyncing ? "Lip-syncing with LTX-2.3…" : "Lip-sync this clip to the song"}
+            {lipSyncing ? "Lip-syncing with Agnes…" : "Lip-sync this clip to the song"}
           </button>
         </div>
       )}
@@ -734,12 +734,12 @@ export function Sidebar() {
           {clip.status === "queued"
             ? "Queued…"
             : clip.status === "generating"
-              ? "Generating with LTX-2.3…"
+              ? "Generating with Agnes…"
               : clip.status === "failed"
-                ? "Retry LTX-2.3"
+                ? "Retry Agnes"
                 : clip.status === "ready"
-                  ? "Regenerate with LTX-2.3"
-                  : "Generate with LTX-2.3"}
+                  ? "Regenerate with Agnes"
+                  : "Generate with Agnes"}
         </button>
 
         {(clip.videoUrl || clip.status !== "empty") && (
@@ -829,7 +829,7 @@ function ImageSeedGrid({
         <span className="tile-add-label">+</span>
       </AssetUploader>
       {images.length === 0 && (
-        <div className="archetype-empty">Add the first image that LTX-2.3 should animate.</div>
+        <div className="archetype-empty">Add the first image that Agnes should animate.</div>
       )}
     </div>
   );

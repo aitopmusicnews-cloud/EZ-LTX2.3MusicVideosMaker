@@ -15,7 +15,7 @@ export function patchDirectorLeftRailLauncher(source, replaceRequired) {
     patched = replaceRequired(patched, effectAnchor, effectWithLauncher, "left-rail Director open event");
   }
 
-  const floatingLauncher = `  if (!open) return <button type="button" style={launcherStyle} onClick={() => setOpen(true)}>✦ LTX Director Agent{clipProgress.active > 0 && <span style={activeDotStyle} />}</button>;`;
+  const floatingLauncher = `  if (!open) return <button type="button" style={launcherStyle} onClick={() => setOpen(true)}>✦ Agnes Director Agent{clipProgress.active > 0 && <span style={activeDotStyle} />}</button>;`;
   if (patched.includes(floatingLauncher)) {
     patched = patched.replace(floatingLauncher, `  if (!open) return null;`);
   } else if (!patched.includes(`if (!open) return null;`)) {

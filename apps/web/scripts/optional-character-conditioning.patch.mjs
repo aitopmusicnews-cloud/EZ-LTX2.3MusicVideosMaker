@@ -44,8 +44,8 @@ export function patchOptionalCharacterConditioning(source, replaceRequired) {
   );
   patched = replaceRequired(
     patched,
-    '>Start conditioned LTX production</button>',
-    '>Start LTX production</button>',
+    '>Start conditioned Agnes production</button>',
+    '>Start Agnes production</button>',
     "Rename production action for optional conditioning",
   );
   return patched;

@@ -429,14 +429,14 @@ export function Timeline() {
 
 function ClipLabel({ status, source }: { status: string; source: string }) {
   const sourceLabel = source === "textToVideo"
-    ? "LTX text"
+    ? "Agnes text"
     : source === "imageToVideo" || source === "archetype"
-      ? "LTX image"
+      ? "Agnes image"
       : source === "continue"
-        ? "LTX continue"
+        ? "Agnes continue"
         : source;
   if (status === "ready") return <span>{sourceLabel}</span>;
-  if (status === "empty") return <span>+ click for LTX</span>;
+  if (status === "empty") return <span>+ click for Agnes</span>;
   if (status === "failed") return <span>failed · click to retry</span>;
   if (status === "generating") return <span className="dotty">generating</span>;
   if (status === "queued") return <span className="dotty">queued</span>;

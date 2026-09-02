@@ -41,7 +41,7 @@ export function patchDirectorEditing(source, replaceRequired) {
           archetypeUrl: shot.imageUrl,
           seedImageUrl: shot.imageUrl,
           source: index === 0 ? "imageToVideo" : "continue",
-          model: "ltx-video",
+          model: "agnes-video-v2.0",
           sectionLabel: shot.label,
           status: "empty",
           lastError: undefined,
@@ -67,7 +67,7 @@ export function patchDirectorEditing(source, replaceRequired) {
           source: visualAnchor
             ? (index === 0 ? "imageToVideo" : "continue")
             : (index === 0 ? "textToVideo" : "continue"),
-          model: "ltx-video",
+          model: "agnes-video-v2.0",
           sectionLabel: shot.label,
           status: "empty",
           lastError: undefined,

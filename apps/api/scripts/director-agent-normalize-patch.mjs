@@ -103,7 +103,7 @@ function normalizeDirectorPlan(
     rawTreatment.title,
     root.title,
     req.songFilename ? req.songFilename.replace(/\\.[^.]+$/, "") : "",
-    "Untitled LTX Music Video",
+    "Untitled Agnes Music Video",
   );
 
   const rawShotByClipId = new Map<string, Record<string, any>>();
@@ -188,7 +188,7 @@ function normalizeDirectorPlan(
         rawTreatment.cameraLanguage,
         rawTreatment.camera_language,
         rawTreatment.camera,
-        "Use deliberate cinematic framing and motivated camera movement that can be completed inside each short LTX clip.",
+        "Use deliberate cinematic framing and motivated camera movement that can be completed inside each short Agnes clip.",
       ),
       continuityStrategy: firstString(
         rawTreatment.continuityStrategy,
@@ -277,10 +277,10 @@ function extractGeminiText(payload: unknown): string {`,
 
   patched = replaceRequired(
     patched,
-    `  throw new Error(\`Gemini Director could not produce a valid LTX plan: \${lastIssues.join("; ")}\`);`,
+    `  throw new Error(\`Gemini Director could not produce a valid Agnes plan: \${lastIssues.join("; ")}\`);`,
     `  const visibleIssues = lastIssues.slice(0, 20).join("; ");
   const remaining = lastIssues.length > 20 ? \`; plus \${lastIssues.length - 20} more issues\` : "";
-  throw new Error(\`Gemini Director could not produce a valid LTX plan: \${visibleIssues}\${remaining}\`);`,
+  throw new Error(\`Gemini Director could not produce a valid Agnes plan: \${visibleIssues}\${remaining}\`);`,
     "concise final Director validation error",
   );
 

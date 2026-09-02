@@ -87,11 +87,11 @@ export function patchLongSectionScheduler(source) {
   }
   let task: { id: string };
   if (source === "textToVideo") {
-    task = await startTextToVideo({ promptText, model: "ltx-video", ratio: "3:2", duration: providerDuration });
+    task = await startTextToVideo({ promptText, model: "agnes-video-v2.0", ratio: "3:2", duration: providerDuration });
   } else {
     const firstFrame = source === "continue" ? await resolvePreviousFrame(job) : seedImageUrl;
     if (!firstFrame) throw new Error(job.input.requiresCharacter ? "Character conditioning is required. No character image was attached." : "Image-to-video requires a first-frame reference");
-    task = await startImageToVideo({ promptImage: firstFrame, characterRequired: job.input.requiresCharacter, promptText, ratio: "3:2", duration: providerDuration, model: "ltx-video" });
+    task = await startImageToVideo({ promptImage: firstFrame, characterRequired: job.input.requiresCharacter, promptText, ratio: "3:2", duration: providerDuration, model: "agnes-video-v2.0" });
   }
   setJobPatch(job.id, { taskId: task.id });
   useStore.getState().updateClip(job.clipId, { generationTaskId: task.id });
@@ -151,7 +151,7 @@ ${runAnchor}`;
       useStore.getState().updateClip(job.clipId, { status: "empty" });
       return;
     }`;
-  if (!patched.includes(oldRunBlock)) throw new Error("Could not replace single-call LTX generation with logical section generation.");
+  if (!patched.includes(oldRunBlock)) throw new Error("Could not replace single-call Agnes generation with logical section generation.");
   patched = patched.replace(oldRunBlock, newRunBlock);
 
   const catchAnchor = `  } catch (error) {

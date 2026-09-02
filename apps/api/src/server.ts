@@ -11,7 +11,7 @@ import { config } from "./config.js";
 import { createDirectorPlan } from "./director_agent.js";
 import { saveUpload, readAnalysis, writeAnalysisError, readAnalysisError, clearAnalysisError, CorruptAnalysisError } from "./storage.js";
 import { analyzeFromUrl } from "./audio.js";
-import { imageToVideo, generatePerformance, animateLipSync, generateCharacterFrame, readJobFromDisk, writeJobToDisk, decodeTaskId } from "./modalAI.js";
+import { imageToVideo, generatePerformance, animateLipSync, generateCharacterFrame, refreshAgnesJob, decodeTaskId } from "./agnesAI.js";
 import { submitRender, getRenderJob } from "./render_queue.js";
 import type { RenderRequest } from "./render.js";
 import { FfmpegError } from "./ffmpeg.js";
@@ -30,7 +30,6 @@ const app = Fastify({ logger: { level: "info" }, trustProxy: true, bodyLimit: 10
 const webOrigins = config.WEB_ORIGIN.split(",").map((s) => s.trim()).filter(Boolean);
 if (config.PUBLIC_BASE_URL) webOrigins.push(config.PUBLIC_BASE_URL.replace(/\/$/, ""));
 await app.register(cors, { origin: (origin, cb) => { if (!origin) return cb(null, true); if (webOrigins.includes(origin)) return cb(null, true); if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin) || /^https?:\/\/.*\.run\.app$/.test(origin) || /^https?:\/\/.*\.onrender\.com$/.test(origin)) return cb(null, true); cb(null, false); }, credentials: true });
-function requestPublicBaseUrl(req: { headers: Record<string, unknown>; protocol?: string }): string { if (config.PUBLIC_BASE_URL) return config.PUBLIC_BASE_URL.replace(/\/$/, ""); const forwardedProto = String(req.headers["x-forwarded-proto"] ?? "").split(",")[0]?.trim(); const forwardedHost = String(req.headers["x-forwarded-host"] ?? "").split(",")[0]?.trim(); const host = forwardedHost || String(req.headers.host ?? "localhost:3001"); const protocol = forwardedProto || req.protocol || "http"; return `${protocol}://${host}`; }
 await app.register(rateLimit, { max: 200, timeWindow: "1 minute" });
 await app.register(multipart, { limits: { fileSize: 100 * 1024 * 1024 } });
 await app.register(fastifyStatic, { root: join(process.cwd(), config.STORAGE_DIR), prefix: "/storage/", decorateReply: false });
@@ -42,7 +41,7 @@ const serveSpa = !!(webDistResolved && existsSync(webDistResolved));
 if (serveSpa) await app.register(fastifyStatic, { root: webDistResolved!, prefix: "/", decorateReply: true, wildcard: false });
 app.get("/*", async (req, reply) => { const urlLower = req.url.toLowerCase(); const isApiOrStorage = urlLower.startsWith("/api/") || urlLower.startsWith("/storage/") || urlLower.includes("/api/") || urlLower.includes("/storage/"); if (isApiOrStorage) return reply.code(404).send({ error: `Route ${req.method} ${req.url} not found` }); const distDir = webDistResolved; if (serveSpa && distDir) { const urlPath = req.url.split("?")[0] ?? "/"; const targetFile = join(distDir, urlPath); if (existsSync(targetFile) && statSync(targetFile).isFile()) return reply.sendFile(urlPath); return reply.sendFile("index.html"); } return reply.code(404).send({ error: "not found" }); });
 app.setNotFoundHandler((req, reply) => { const urlLower = req.url.toLowerCase(); const isApiOrStorage = urlLower.startsWith("/api/") || urlLower.startsWith("/storage/") || urlLower.includes("/api/") || urlLower.includes("/storage/"); if (isApiOrStorage) return reply.code(404).send({ error: `Route ${req.method} ${req.url} not found` }); if (req.method === "GET" && serveSpa) return reply.sendFile("index.html"); return reply.code(404).send({ error: "not found" }); });
-app.addHook("preHandler", async (req, reply) => { const authToken = config.API_AUTH_TOKEN; if (authToken && req.url.startsWith("/api/")) { if (req.url === "/api/modal/webhook" || req.url === "/api/openrouter/webhook") return; const authHeader = req.headers.authorization; let token = authHeader?.startsWith("Bearer ") ? authHeader.substring(7) : ""; if (!token) token = (req.query as Record<string, string>)?.token || ""; if (token !== authToken) return reply.code(401).send({ error: "Unauthorized" }); } });
+app.addHook("preHandler", async (req, reply) => { const authToken = config.API_AUTH_TOKEN; if (authToken && req.url.startsWith("/api/")) { const authHeader = req.headers.authorization; let token = authHeader?.startsWith("Bearer ") ? authHeader.substring(7) : ""; if (!token) token = (req.query as Record<string, string>)?.token || ""; if (token !== authToken) return reply.code(401).send({ error: "Unauthorized" }); } });
 app.setErrorHandler((err: any, req, reply) => { try { const errorName = err && typeof err === "object" && "name" in err ? String(err.name) : "Error"; const errorMessage = err && typeof err === "object" && "message" in err ? String(err.message) : String(err); const errorStack = err && typeof err === "object" && "stack" in err ? String(err.stack) : ""; appendFileSync("api-debug.log", `[${new Date().toISOString()}] ${req.method} ${req.url}\nHeaders: ${JSON.stringify(req.headers)}\nBody: ${JSON.stringify(req.body)}\nError: ${errorName} - ${errorMessage}\nStack: ${errorStack}\n-------------------------------------------\n`, "utf8"); } catch {} if (err instanceof z.ZodError) return reply.code(400).send({ error: err.errors.map((e) => e.message).join("; ") }); if (err instanceof FfmpegError) return reply.code(500).send({ error: err.message }); req.log.error(err); return reply.code(500).send({ error: err instanceof Error ? err.message : String(err) }); });
 app.get("/health", async () => ({ ok: true }));
 app.post("/api/director/plan", { config: { rateLimit: { max: 6, timeWindow: "1 minute" } } }, async (req, reply) => {
@@ -57,7 +56,7 @@ app.post("/api/director/plan", { config: { rateLimit: { max: 6, timeWindow: "1 m
         : message.includes("Character conditioning") || message.includes("character reference")
           ? 409
           : 500;
-    req.log.error({ err: error }, "LTX Director Agent failed");
+    req.log.error({ err: error }, "Agnes Director Agent failed");
     return reply.code(status).send({ error: message });
   }
 });
@@ -85,71 +84,13 @@ app.post(
 
 app.post("/api/songs/upload", { config: { rateLimit: { max: 20, timeWindow: "1 minute" } } }, async (req, reply) => { const file = await req.file(); if (!file) return reply.code(400).send({ error: "no file" }); const isAudio = file.mimetype?.startsWith("audio/") || /\.(mp3|wav|m4a|aac|flac|ogg|oga|opus)$/i.test(file.filename); if (!isAudio) return reply.code(400).send({ error: `expected audio, got ${file.mimetype}` }); const buf = await file.toBuffer(); if (!sniffMatches(buf, "audio")) return reply.code(400).send({ error: "file content is not a recognized audio format" }); const { id, publicUrl } = await saveUpload(buf, file.filename, file.mimetype); return reply.send({ id, url: resolvePublicUrl(req, publicUrl), audioUrl: resolvePublicUrl(req, publicUrl) }); });
 app.get("/api/songs/:id/analysis", async (req, reply) => { const params = z.object({ id: SafeId }).parse(req.params); let analysis; try { analysis = await readAnalysis(params.id); } catch (err) { if (err instanceof CorruptAnalysisError) return reply.send({ status: "failed", error: "corrupt analysis cache" }); throw err; } if (analysis) return reply.send({ status: "ready", analysis }); const errMsg = await readAnalysisError(params.id); if (errMsg) return reply.send({ status: "failed", error: errMsg }); return reply.send({ status: "pending" }); });
-app.post("/api/generate/image-to-video", { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } }, async (req, reply) => reply.code(202).send(await imageToVideo(ImageToVideoRequest.parse(req.body), requestPublicBaseUrl(req as any))));
-app.post("/api/generate/video-to-video", async (req, reply) => { try { const body = VideoToVideoRequest.parse(req.body); return reply.code(202).send(await imageToVideo({ prompt: body.prompt, promptText: (body as any).promptText ?? body.prompt, model: body.model, duration: (body as any).duration }, requestPublicBaseUrl(req as any))); } catch (error: any) { return reply.code(500).send({ error: error.message }); } });
+app.post("/api/generate/image-to-video", { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } }, async (req, reply) => reply.code(202).send(await imageToVideo(ImageToVideoRequest.parse(req.body))));
+app.post("/api/generate/video-to-video", async (req, reply) => { try { const body = VideoToVideoRequest.parse(req.body); return reply.code(202).send(await imageToVideo({ prompt: body.prompt, promptText: (body as any).promptText ?? body.prompt, model: body.model, duration: (body as any).duration })); } catch (error: any) { return reply.code(500).send({ error: error.message }); } });
 app.post("/api/generate/performance", { config: { rateLimit: { max: 6, timeWindow: "1 minute" } } }, async (req, reply) => reply.code(202).send(await generatePerformance(PerformanceRequest.parse(req.body))));
 app.post("/api/generate/lip-sync", { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } }, async (req, reply) => reply.send(await animateLipSync(LipSyncRequest.parse(req.body))));
 app.post("/api/generate/text-to-image", { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } }, async (req, reply) => reply.send(await generateCharacterFrame(TextToImageRequest.parse(req.body))));
-app.post("/api/generate/text-to-video", { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } }, async (req, reply) => { const body = TextToVideoRequest.parse(req.body); return reply.code(202).send(await imageToVideo(body, requestPublicBaseUrl(req as any))); });
-const WebhookBody = z.object({ status: z.enum(["completed", "failed"]), job_id: z.string(), video_url: z.string().url().optional().nullable(), image_url: z.string().url().optional().nullable(), error: z.string().optional().nullable() });
-const modalWebhookHandler = async (req: any, reply: any) => {
-  const body = WebhookBody.parse(req.body);
-  const { status, job_id, video_url, image_url, error } = body;
-  const now = Date.now();
-
-  const existingJob = await readJobFromDisk(job_id);
-  const job = existingJob ?? {
-    status: "running" as const,
-    prompt: "Recovered Modal generation",
-    createdAt: now,
-    updatedAt: now,
-  };
-
-  if (!existingJob) {
-    req.log.warn(
-      { jobId: job_id },
-      "Recreating missing Modal job context from callback",
-    );
-  }
-
-  // A completed video is permanent. Never let a delayed failure
-  // callback replace a successful result.
-  if (existingJob?.status === "completed") {
-    if (status === "failed") {
-      req.log.warn(
-        { jobId: job_id, error },
-        "Ignoring late failure callback for completed Modal job",
-      );
-    }
-
-    return reply.send({
-      success: true,
-      ignored: status === "failed",
-    });
-  }
-
-  if (status === "completed" && (video_url || image_url)) {
-    await writeJobToDisk(job_id, {
-      ...job,
-      status: "completed",
-      video_url: video_url ?? job.video_url,
-      image_url: image_url ?? job.image_url,
-      updatedAt: now,
-    });
-  } else {
-    await writeJobToDisk(job_id, {
-      ...job,
-      status: "failed",
-      error: error || "Inference failed on GPU cluster.",
-      updatedAt: now,
-    });
-  }
-
-  return reply.send({ success: true });
-};
-
-app.post("/api/modal/webhook", modalWebhookHandler); app.post("/api/openrouter/webhook", modalWebhookHandler);
-app.get("/api/tasks/:id", async (req, reply) => { try { const { id: encodedId } = req.params as { id: string }; const { id } = decodeTaskId(encodedId); const job = await readJobFromDisk(id); if (!job) return reply.code(404).send({ error: "Task or job record not found" }); if (job.status === "completed" && (job.video_url || job.image_url)) return reply.send({ id: encodedId, status: "SUCCEEDED", progress: 100, outputUrl: job.video_url ?? job.image_url, output: job.image_url ? { imageUrl: job.image_url, url: job.image_url } : [job.video_url!] }); if (job.status === "failed") return reply.send({ id: encodedId, status: "FAILED", progress: 100, error: job.error || "Generation failed" }); return reply.send({ id: encodedId, status: "IN_PROGRESS", progress: 0 }); } catch (error: any) { return reply.code(400).send({ error: error.message }); } });
+app.post("/api/generate/text-to-video", { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } }, async (req, reply) => { const body = TextToVideoRequest.parse(req.body); return reply.code(202).send(await imageToVideo(body)); });
+app.get("/api/tasks/:id", async (req, reply) => { try { const { id: encodedId } = req.params as { id: string }; const { id } = decodeTaskId(encodedId); const job = await refreshAgnesJob(id); if (!job) return reply.code(404).send({ error: "Task or job record not found" }); if (job.status === "completed" && (job.video_url || job.image_url)) return reply.send({ id: encodedId, status: "SUCCEEDED", progress: 100, outputUrl: job.video_url ?? job.image_url, output: job.image_url ? { imageUrl: job.image_url, url: job.image_url } : [job.video_url!] }); if (job.status === "failed") return reply.send({ id: encodedId, status: "FAILED", progress: 100, error: job.error || "Generation failed" }); return reply.send({ id: encodedId, status: "IN_PROGRESS", progress: job.progress ?? 0 }); } catch (error: any) { return reply.code(400).send({ error: error.message }); } });
 app.post("/api/audio/slice", async (req, reply) => { const body = z.object({ audioUrl: urlOrPath, start: z.number().nonnegative(), end: z.number().positive() }).parse(req.body); return reply.send(await sliceAudio(body.audioUrl, body.start, body.end)); });
 app.post("/api/audio/analyze-vocal", async (req, reply) => { const body = z.object({ audioUrl: urlOrPath }).parse(req.body); return reply.send(await analyzeVocalTrack(body.audioUrl)); });
 app.get("/api/projects", async (_req, reply) => reply.send({ projects: await listProjects() }));

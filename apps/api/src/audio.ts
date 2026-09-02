@@ -27,7 +27,7 @@ async function findUploadedFile(id: string): Promise<string | null> {
   return null;
 }
 
-type ModalResponse = {
+type AnalyzerResponse = {
   duration: number;
   bpm: number;
   key: string;
@@ -63,7 +63,7 @@ export async function analyzeFromUrl(songId: string, audioUrl: string): Promise<
       const { stdout } = await execFileAsync("python3", [cliPath, localPath], {
         maxBuffer: 50 * 1024 * 1024,
       });
-      const raw = JSON.parse(stdout) as ModalResponse;
+      const raw = JSON.parse(stdout) as AnalyzerResponse;
       const analysis: AudioAnalysis = {
         duration: raw.duration,
         bpm: raw.bpm,
@@ -77,42 +77,11 @@ export async function analyzeFromUrl(songId: string, audioUrl: string): Promise<
       await writeAnalysis(songId, analysis);
       return analysis;
     } catch (localErr: any) {
-      console.log("Local python analysis failed, falling back to Modal request", localErr?.message ?? localErr);
+      console.log("Local Python analysis failed; using procedural analysis:", localErr?.message ?? localErr);
     }
   }
 
-  try {
-    if (!config.MODAL_AUDIO_URL) {
-      throw new Error("MODAL_AUDIO_URL not configured");
-    }
-
-    const res = await fetch(config.MODAL_AUDIO_URL, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ url: audioUrl }),
-    });
-    if (!res.ok) {
-      const detail = await res.text();
-      throw new Error(`modal analysis failed: ${res.status} ${detail}`);
-    }
-    const raw = (await res.json()) as ModalResponse;
-
-    const analysis: AudioAnalysis = {
-      duration: raw.duration,
-      bpm: raw.bpm,
-      key: raw.key,
-      beats: raw.beats,
-      downbeats: raw.downbeats,
-      onsets: raw.onsets,
-      rmsCurve: raw.rms_curve,
-      sections: raw.sections,
-    };
-
-    await writeAnalysis(songId, analysis);
-    return analysis;
-  } catch (err: any) {
-    console.log("Modal analysis failed, falling back to procedural analysis generator:", err?.message ?? err);
-
+  {
     let dur = 180;
     try {
       dur = await probeDuration(localPath ?? audioUrl);
@@ -185,4 +154,3 @@ function generateProceduralAnalysis(dur: number): AudioAnalysis {
     sections,
   };
 }
-

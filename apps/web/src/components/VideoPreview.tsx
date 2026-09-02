@@ -80,7 +80,7 @@ export function VideoPreview() {
         }
       })
       .catch(() => {
-        // Preview can still use temporary Modal URLs when the library is offline.
+        // Preview can still use temporary Agnes URLs when the library is offline.
       });
 
     return () => {
@@ -243,7 +243,7 @@ export function VideoPreview() {
             {playheadClip.status === "queued" ? "Queued in workspace..." : "Generating Video & Foley..."}
           </div>
           <div style={{ marginTop: "4px", color: "#a1a1aa", fontSize: "0.8rem" }}>
-            LTX-2.3-Audio pipeline running on Modal GPU...
+            Agnes-Audio pipeline running on Agnes API...
           </div>
         </div>
       )}

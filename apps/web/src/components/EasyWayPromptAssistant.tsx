@@ -401,7 +401,7 @@ export function EasyWayPromptAssistant() {
       archetypeUrl: brief.mainCharacterUrl,
       seedImageUrl: brief.mainCharacterUrl,
       source: shouldContinue ? "continue" : "imageToVideo",
-      model: "ltx-video",
+      model: "agnes-video-v2.0",
       sectionLabel: label,
       lastError: undefined,
     });
@@ -429,7 +429,7 @@ export function EasyWayPromptAssistant() {
         archetypeUrl: brief.mainCharacterUrl,
         seedImageUrl: brief.mainCharacterUrl,
         source: shouldContinue ? "continue" : "imageToVideo",
-        model: "ltx-video",
+        model: "agnes-video-v2.0",
         sectionLabel: label,
         lastError: undefined,
       });

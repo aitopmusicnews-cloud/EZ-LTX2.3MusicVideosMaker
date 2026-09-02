@@ -24,27 +24,27 @@ export function LeftRail() {
       id: `img-${crypto.randomUUID().slice(0, 8)}`,
       name: filename,
       url,
-      source: "ltx-reference",
+      source: "agnes-reference",
       prompt: null,
-      model: "ltx-2.3",
+      model: "agnes-video-v2.0",
     })
       .then((saved) => {
         if (saved.url !== url) replaceLookbookUrl(url, saved.url);
       })
-      .catch((error) => console.warn("save LTX reference image failed", error));
+      .catch((error) => console.warn("save Agnes reference image failed", error));
   };
 
   return (
     <aside className="left">
       <div className="section">
         <div className="section-header">
-          <span className="label">LTX-2.3 deployment</span>
+          <span className="label">Agnes deployment</span>
         </div>
         <div className="context-card">
-          <div className="row"><span>Pipeline</span><span>Distilled</span></div>
-          <div className="row"><span>Video</span><span>768×512 · 24 FPS</span></div>
+          <div className="row"><span>Pipeline</span><span>Agnes API</span></div>
+          <div className="row"><span>Video</span><span>Up to 1152×768 · 24 FPS</span></div>
           <div className="row"><span>Clip length</span><span>1–5 seconds</span></div>
-          <div className="row"><span>Audio</span><span>Native synchronized</span></div>
+          <div className="row"><span>Audio</span><span>Song-reference guided</span></div>
         </div>
       </div>
 
@@ -68,7 +68,7 @@ export function LeftRail() {
           <span className="dim" style={{ fontSize: 11 }}>{lookbook.length}/{LOOKBOOK_MAX}</span>
         </div>
         <div className="rail-help">
-          These images are used only for LTX-2.3 image-to-video generations.
+          These images are used only for Agnes image-to-video generations.
         </div>
         <div className="lookbook">
           {lookbook.map((url) => (

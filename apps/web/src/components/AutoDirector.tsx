@@ -480,7 +480,7 @@ export function AutoDirector() {
           archetypeUrl: shot.imageUrl,
           seedImageUrl: shot.imageUrl,
           source: index === 0 ? "imageToVideo" : "continue",
-          model: "ltx-video",
+          model: "agnes-video-v2.0",
           sectionLabel: shot.label,
           status: "empty",
           lastError: undefined,
@@ -506,7 +506,7 @@ export function AutoDirector() {
         duration: clip.end - clip.start,
         sectionLabel: clip.sectionLabel || "song section",
         energy: 0.6,
-        model: "ltx-video",
+        model: "agnes-video-v2.0",
       });
     }
     toast.success("Automated production queue started");
@@ -523,7 +523,7 @@ export function AutoDirector() {
         duration: clip.end - clip.start,
         sectionLabel: clip.sectionLabel || "song section",
         energy: 0.6,
-        model: "ltx-video",
+        model: "agnes-video-v2.0",
       });
     }
   };
@@ -548,7 +548,7 @@ export function AutoDirector() {
           audioEnd: clip.end,
           promptText: clip.prompt || "The approved recording artist sings naturally with accurate mouth movement and stable identity.",
           referenceStrength: 1,
-          model: "ltx-2.3-lipdub",
+          model: "agnes-video-2.5-flash",
         });
         updateClip(clip.id, { generationTaskId: task.id });
         const final = await pollTask(task.id, 4000, 1_800_000);
@@ -559,7 +559,7 @@ export function AutoDirector() {
         updateClip(clip.id, {
           videoUrl: outputUrl,
           source: "lipSync",
-          model: "ltx-2.3-lipdub",
+          model: "agnes-video-2.5-flash",
           status: "ready",
           generationTaskId: undefined,
           lastError: undefined,
@@ -574,7 +574,7 @@ export function AutoDirector() {
           prompt: clip.prompt || null,
           duration: clip.end - clip.start,
           sectionLabel: clip.sectionLabel || null,
-          model: "ltx-2.3-lipdub",
+          model: "agnes-video-2.5-flash",
         }).catch((error) => console.warn("Could not save automated LipDub clip", error));
       }
       updateSession({ stage: "final", lipSyncedClipIds: synced });
@@ -860,7 +860,7 @@ export function AutoDirector() {
           {session.stage === "lipsync" && (
             <section>
               <h3 style={sectionTitleStyle}>6. Approve performance synchronization</h3>
-              <p style={helpStyle}>The Director selected up to {MAX_LIPSYNC_SHOTS} key vocal-performance shots for LTX-2.3 LipDub. This step is optional.</p>
+              <p style={helpStyle}>The Director selected up to {MAX_LIPSYNC_SHOTS} key vocal-performance shots for Agnes LipDub. This step is optional.</p>
               <div style={summaryGridStyle}>
                 <Summary label="Selected shots" value={String(performanceClipIds.length)} />
                 <Summary label="Completed" value={String(session.lipSyncedClipIds.length)} />

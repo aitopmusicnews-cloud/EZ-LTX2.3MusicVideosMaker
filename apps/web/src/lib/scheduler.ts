@@ -61,7 +61,7 @@ function taskOutputUrl(task: Task): string | undefined {
 const newJobId = () => `job-${crypto.randomUUID().slice(0, 8)}`;
 let resumed = false;
 
-/** Reattach to Modal jobs that were still running when the page reloaded. */
+/** Reattach to Agnes jobs that were still running when the page reloaded. */
 export function resumeInflightJobs(): void {
   if (resumed) return;
   resumed = true;
@@ -92,7 +92,7 @@ async function resumeClipPoll(
       currentClip.generationTaskId !== taskId
     ) {
       console.warn(
-        "Ignoring stale resumed LTX completion",
+        "Ignoring stale resumed Agnes completion",
         taskId,
         "because the clip now belongs to",
         currentClip.generationTaskId,
@@ -114,7 +114,7 @@ async function resumeClipPoll(
       lastError: undefined,
     });
 
-    toast.success("Resumed LTX-2.3 clip ready");
+    toast.success("Resumed Agnes clip ready");
 
     const clip = useStore.getState().clips.find(
       (item) => item.id === clipId,
@@ -138,7 +138,7 @@ async function resumeClipPoll(
     // Ignore an error from an older task after a newer task took ownership.
     if (!ownsClip) {
       console.warn(
-        "Ignoring stale resumed LTX failure",
+        "Ignoring stale resumed Agnes failure",
         taskId,
         "because the clip now belongs to",
         currentClip?.generationTaskId,
@@ -205,14 +205,14 @@ export function enqueueGeneration(input: EnqueueInput): string {
       duration: clampDuration(input.duration),
       sectionLabel: input.sectionLabel,
       energy: input.energy,
-      model: "ltx-video",
+      model: "agnes-video-v2.0",
     },
   };
 
   useStore.getState().setJobs((jobs) => [...jobs, job]);
   useStore.getState().updateClip(input.clipId, {
     source: input.source,
-    model: "ltx-video",
+    model: "agnes-video-v2.0",
     status: "queued",
     prompt: input.prompt,
     lastError: undefined,
@@ -292,7 +292,7 @@ async function startTask(job: Job): Promise<{ id: string }> {
   if (job.input.source === "textToVideo") {
     return startTextToVideo({
       promptText,
-      model: "ltx-video",
+      model: "agnes-video-v2.0",
       ratio: "3:2",
       duration: job.input.duration,
     });
@@ -309,7 +309,7 @@ async function startTask(job: Job): Promise<{ id: string }> {
     promptText,
     ratio: "3:2",
     duration: job.input.duration,
-    model: "ltx-video",
+    model: "agnes-video-v2.0",
   });
 }
 
@@ -347,7 +347,7 @@ async function run(jobId: string): Promise<void> {
       status: "ready",
       lastError: undefined,
     });
-    toast.success(`LTX-2.3 clip ready (${job.input.sectionLabel})`);
+    toast.success(`Agnes clip ready (${job.input.sectionLabel})`);
 
     const clip = useStore.getState().clips.find((item) => item.id === job.clipId);
     if (clip) void persistGeneratedClip(clip, videoUrl, job.input.sectionLabel);
@@ -378,14 +378,14 @@ async function run(jobId: string): Promise<void> {
     // Never replace a playable completed video with a stale failure.
     if (!ownsClip) {
       console.warn(
-        "Ignoring stale LTX failure",
+        "Ignoring stale Agnes failure",
         currentJob?.taskId,
         "because the clip belongs to",
         currentClip?.generationTaskId,
       );
     } else if (currentClip?.status === "ready" && currentClip.videoUrl) {
       console.warn(
-        "LTX task reported a late failure after the clip became ready:",
+        "Agnes task reported a late failure after the clip became ready:",
         reason,
       );
       toast.warning("A late task error was ignored because the video completed.");
@@ -396,7 +396,7 @@ async function run(jobId: string): Promise<void> {
       });
 
       if (rateLimited) toast.warning(reason, 8000);
-      else toast.error(`LTX-2.3 generation failed: ${reason.slice(0, 120)}`);
+      else toast.error(`Agnes generation failed: ${reason.slice(0, 120)}`);
     }
   } finally {
     pump();
@@ -413,10 +413,10 @@ async function persistGeneratedClip(clip: Clip, videoUrl: string, sectionLabel: 
       prompt: clip.prompt || null,
       duration: clip.end - clip.start,
       sectionLabel,
-      model: "ltx-video",
+      model: "agnes-video-v2.0",
       generationTaskId: clip.generationTaskId,
     });
-    // Keep the immediately playable Modal URL in the active timeline. The
+    // Keep the immediately playable Agnes URL in the active timeline. The
     // server may rehost the file into a private S3 bucket and return a direct
     // S3 URL; anonymous browser playback of that URL returns 403. Once the
     // private-media proxy is enabled, same-origin /media or /storage URLs are
@@ -429,6 +429,6 @@ async function persistGeneratedClip(clip: Clip, videoUrl: string, sectionLabel: 
       useStore.getState().updateClip(clip.id, { videoUrl: saved.videoUrl });
     }
   } catch (error) {
-    console.warn("auto-save LTX clip failed", error);
+    console.warn("auto-save Agnes clip failed", error);
   }
 }

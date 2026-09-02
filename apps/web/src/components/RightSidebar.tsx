@@ -26,7 +26,7 @@ export function RightSidebar() {
           className={`sidebar-tab${tab === "ltx" ? " active" : ""}`}
           onClick={() => setTab("ltx")}
         >
-          LTX-2.3
+          Agnes
         </button>
         <button
           type="button"

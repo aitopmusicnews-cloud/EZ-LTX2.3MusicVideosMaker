@@ -14,10 +14,10 @@ export function SidebarEmpty() {
 
   return (
     <>
-      <div className="empty-title">LTX-2.3 Timeline</div>
+      <div className="empty-title">Agnes Timeline</div>
       <div className="empty-hint">
         {analysis
-          ? "Select a timeline clip to generate with LTX-2.3."
+          ? "Select a timeline clip to generate with Agnes."
           : "Drop a song on the timeline to create generation segments."}
       </div>
 
