@@ -99,7 +99,7 @@ export function LeftRail() {
               aria-label="Director clip amount"
               style={{ width: "100%", minHeight: 36, padding: "7px 9px", borderRadius: 7, border: "1px solid rgba(255,255,255,.14)", background: "rgba(255,255,255,.05)", color: "inherit" }}
             />
-            <span>Auto follows your timecoded Vision. Enter 1–80 to split or combine production clips.</span>
+            <span>Timecoded Vision keeps its exact scripted shots. Clip amount applies to non-timecoded/prose plans.</span>
           </label>
           <div style={{ display: "grid", gap: 8 }}>
             <button type="button" className="btn ghost w-full" onClick={() => window.dispatchEvent(new CustomEvent("mvs-open-ltx-director"))}>✦ Director</button>
