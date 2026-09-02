@@ -14,7 +14,7 @@ export type ParsedDirectorVision =
   | { mode: "structured"; rawText: string; shots: ParsedVisionShot[] };
 
 const RANGE = /(\d{1,2}:\d{2})\s*[–—-]\s*(\d{1,2}:\d{2})/g;
-const SHOT_LABEL = /^\s*(Shot\s+\d+\s*:\s*[^\n\r]+)/i;
+const SHOT_PREFIX = /^\s*Shot\s+(\d+)\s*:\s*/i;
 
 export function parseTimecode(value: string): number | null {
   const match = /^(\d{1,2}):(\d{2})$/.exec(value.trim());
@@ -51,12 +51,23 @@ export function parseDirectorVision(value: string): ParsedDirectorVision {
     const chunkStart = (match.index ?? 0) + match[0].length;
     const chunkEnd = matches[index + 1]?.index ?? rawText.length;
     const rawChunk = rawText.slice(chunkStart, chunkEnd).trim();
-    const labelMatch = SHOT_LABEL.exec(rawChunk);
-    const label = labelMatch?.[1]?.trim() || `Shot ${index + 1}`;
-    const body = labelMatch ? rawChunk.slice(labelMatch[0].length).trim() : rawChunk;
+    const prefixMatch = SHOT_PREFIX.exec(rawChunk);
+    const hasLineBreak = /[\r\n]/.test(rawChunk);
 
-    // Preserve the full body as visual direction. We only peel out fields when
-    // the user's paste explicitly labels them, so no user instruction is lost.
+    // Rich clipboard tables often paste a whole row as one long line. In that
+    // form we keep the complete row as direction and use a simple Shot N label
+    // so none of the visual/camera/audio/text instructions are swallowed by a
+    // greedy title match.
+    let label = `Shot ${prefixMatch?.[1] ?? index + 1}`;
+    let body = rawChunk;
+    if (prefixMatch && hasLineBreak) {
+      const firstLine = rawChunk.split(/\r?\n/, 1)[0]?.trim() ?? "";
+      if (firstLine) {
+        label = firstLine;
+        body = rawChunk.slice(firstLine.length).trim();
+      }
+    }
+
     const cameraDirection = extractLabeledLine(body, [/(?:camera|camera direction)\s*[:\-]\s*(.+)/i]);
     const audioCue = extractLabeledLine(body, [/(?:audio|audio cue|lyric cue|audio & lyric cues?)\s*[:\-]\s*(.+)/i]);
     const onScreenText = extractLabeledLine(body, [/(?:on[- ]screen text|text)\s*[:\-]\s*(.+)/i]);
