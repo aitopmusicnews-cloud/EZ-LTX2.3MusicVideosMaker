@@ -13,7 +13,7 @@ const patched = patchDirectorLeftRailLauncher(source, replaceRequired);
 test("the left-rail Director parses structured Vision before choosing timeline clips", () => {
   assert.match(patched, /parseDirectorVision/);
   assert.match(patched, /buildVisionTimelineClips/);
-  assert.match(patched, /const planningClips = buildVisionTimelineClips\(session\.vision, clips\)/);
+  assert.match(patched, /const planningClips = buildVisionTimelineClips\(session\.vision, clips,/);
 });
 
 test("the left-rail Director sends Vision-derived clips to the Director API", () => {
@@ -25,4 +25,13 @@ test("structured Vision replaces stale analyzer clips before plan approval", () 
   assert.match(patched, /useStore\.setState\(\{ clips: planningClips/);
   assert.match(patched, /const SESSION_VERSION = 3/);
   assert.match(patched, /Vision override detected:/);
+});
+
+test("the active Director exposes an editable production clip amount", () => {
+  assert.match(patched, /clipCount:\s*number\s*\|\s*null/);
+  assert.match(patched, /Clip amount/);
+  assert.match(patched, /requestedClipCount/);
+  assert.match(patched, /buildVisionTimelineClips\(session\.vision, clips, requestedClipCount\)/);
+  assert.match(patched, /min=\{1\}/);
+  assert.match(patched, /max=\{80\}/);
 });
