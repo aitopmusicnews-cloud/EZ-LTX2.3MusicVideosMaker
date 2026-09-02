@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { config } from "./config.js";
 import { runGeminiDirectorWithFallback } from "./gemini_director_retry.js";
-import { buildLocalDirectorChatResponse } from "./director_chat_local.js";
+import { buildLocalDirectorChatResponse, type LocalDirectorChatShot } from "./director_chat_local.js";
 
 const UpdateClipActionSchema = z.object({
   type: z.literal("update_clip"),
@@ -147,20 +147,19 @@ export async function chatWithDirector(rawRequest: unknown): Promise<z.infer<typ
   const req = DirectorChatRequestSchema.parse(rawRequest);
   const validClipIds = new Set(req.plan.shots.map((shot) => shot.clipId));
   const validReferenceIds = new Set(req.references.map((reference) => reference.id));
+  const localShots: LocalDirectorChatShot[] = req.plan.shots.map((shot) => ({
+    clipId: String(shot.clipId),
+    sectionLabel: shot.sectionLabel,
+    start: shot.start,
+    end: shot.end,
+    prompt: shot.prompt,
+    continuityNotes: shot.continuityNotes,
+    transition: shot.transition,
+  }));
 
   const localFallback = () => DirectorChatResponseSchema.parse(buildLocalDirectorChatResponse({
     message: req.message,
-    plan: {
-      shots: req.plan.shots.map((shot) => ({
-        clipId: String(shot.clipId),
-        sectionLabel: shot.sectionLabel,
-        start: shot.start,
-        end: shot.end,
-        prompt: shot.prompt,
-        continuityNotes: shot.continuityNotes,
-        transition: shot.transition,
-      })),
-    },
+    plan: { shots: localShots },
   }));
 
   if (!config.GEMINI_API_KEY) return localFallback();
