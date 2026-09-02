@@ -2,7 +2,7 @@ name: Build Check
 
 on:
   push:
-    branches: [main, backup-pre-rollback-1890d80, feature/director-vision-first-clips, fix/director-no-silent-fallback, feature/director-editable-clip-count, fix/gemini-director-capacity-retry, fix/director-local-fallback, fix/director-chat-quota-fallback]
+    branches: [main, backup-pre-rollback-1890d80, feature/director-vision-first-clips, fix/director-no-silent-fallback, feature/director-editable-clip-count, fix/gemini-director-capacity-retry, fix/director-local-fallback, fix/director-chat-quota-fallback, feature/director-asset-chat-multichar]
   pull_request:
     branches: [main, backup-pre-rollback-1890d80]
 
@@ -21,6 +21,6 @@ jobs:
       - name: Install dependencies
         run: npm ci
       - name: Director regression tests
-        run: node apps/web/scripts/clip-count-prebuild.mjs && npx tsx --test apps/web/src/lib/directorVisionParser.test.ts apps/web/src/lib/directorAgentVision.test.ts apps/web/src/lib/directorPlan.test.ts apps/web/src/lib/directorGeneration.test.ts apps/web/src/components/AutoDirector.vision-first.test.ts apps/web/src/components/LtxDirectorAgent.vision-first.test.ts apps/api/src/director_agent.retry.test.ts apps/api/src/director_local_plan.test.ts apps/api/src/director_chat_local.test.ts
+        run: node apps/web/scripts/clip-count-prebuild.mjs && npx tsx --test apps/web/src/lib/directorVisionParser.test.ts apps/web/src/lib/directorAgentVision.test.ts apps/web/src/lib/directorPlan.test.ts apps/web/src/lib/directorGeneration.test.ts apps/web/src/lib/directorCharacterState.test.ts apps/web/src/components/AutoDirector.vision-first.test.ts apps/web/src/components/LtxDirectorAgent.vision-first.test.ts apps/api/src/director_agent.retry.test.ts apps/api/src/director_local_plan.test.ts apps/api/src/director_chat_local.test.ts
       - name: Build workspaces
         run: npm run build
