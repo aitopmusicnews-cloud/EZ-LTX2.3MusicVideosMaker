@@ -91,13 +91,18 @@ export function preferredAgnesResultUrl(videoId: string, model: AgnesVideoModel)
 }
 
 export function completedAgnesUrl(payload: unknown): string | null {
-  if (!isRecord(payload) || !isRecord(payload.metadata)) return null;
-  const raw = payload.metadata.url;
-  if (typeof raw !== "string") return null;
-  try {
-    const url = new URL(raw);
-    return url.protocol === "https:" ? url.toString() : null;
-  } catch {
-    return null;
+  if (!isRecord(payload)) return null;
+
+  const metadataUrl = isRecord(payload.metadata) ? payload.metadata.url : undefined;
+  const candidates = [payload.url, metadataUrl];
+  for (const raw of candidates) {
+    if (typeof raw !== "string") continue;
+    try {
+      const url = new URL(raw);
+      if (url.protocol === "https:") return url.toString();
+    } catch {
+      // Try the next documented/legacy response shape.
+    }
   }
+  return null;
 }
