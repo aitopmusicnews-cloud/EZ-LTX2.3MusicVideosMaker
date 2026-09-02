@@ -39,3 +39,15 @@ test("pending asset edits use target type plus clip ID so scene shot and clip ed
   assert.match(patched, /assetEditKey/);
   assert.match(patched, /\$\{type\}:\$\{clipId\}/);
 });
+
+test("approval images accept multiple reference URLs", () => {
+  assert.match(patched, /generateApprovalImage\(prompt: string, referenceUrls: string\[\] = \[\]\)/);
+  assert.match(patched, /buildApprovalReferenceImages/);
+  assert.match(patched, /resolveCharacterReferenceUrls/);
+});
+
+test("character-required video generation uses only an approved shot image as the Agnes seed", () => {
+  assert.match(patched, /chooseApprovedShotSeed\(session\.shotApprovals\[clipId\]\)/);
+  assert.match(patched, /needs an approved shot image before video generation/);
+  assert.match(patched, /seedImageUrl: approvedShotSeed/);
+});
