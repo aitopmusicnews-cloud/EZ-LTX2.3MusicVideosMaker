@@ -22,7 +22,8 @@ import {
   type JobRecord,
 } from "./generationJobs.js";
 
-type AgnesJobState = { ids: AgnesCreateIds };
+const AGNES_STATUS_POLL_INTERVAL_MS = 15_000;
+type AgnesJobState = { ids: AgnesCreateIds; nextPollAt?: number };
 type VideoRequest = ImageToVideoRequest | TextToVideoRequest;
 
 function apiKey(): string {
@@ -71,13 +72,14 @@ async function startVideoJob(prefix: string, prompt: string, create: () => Promi
   await writeJobToDisk(id, { status: "pending", prompt, progress: 0, createdAt: now, updatedAt: now });
   try {
     const ids = await create();
+    const startedAt = Date.now();
     await writeJobToDisk(id, {
       status: "running",
       prompt,
       progress: 0,
       createdAt: now,
-      updatedAt: Date.now(),
-      providerState: { ids } satisfies AgnesJobState,
+      updatedAt: startedAt,
+      providerState: { ids, nextPollAt: startedAt + AGNES_STATUS_POLL_INTERVAL_MS } satisfies AgnesJobState,
     });
     return { id: encodeTaskId({ source: "agnes", id }) };
   } catch (error) {
@@ -180,7 +182,9 @@ function agnesState(record: JobRecord): AgnesJobState | null {
   return state?.ids?.videoId && state.ids.model ? state as AgnesJobState : null;
 }
 
-export async function refreshAgnesJob(id: string): Promise<JobRecord | null> {
+const refreshes = new Map<string, Promise<JobRecord | null>>();
+
+async function refreshAgnesJobOnce(id: string): Promise<JobRecord | null> {
   const record = await readJobFromDisk(id);
   if (!record || record.status !== "running") return record;
   const state = agnesState(record);
@@ -189,14 +193,27 @@ export async function refreshAgnesJob(id: string): Promise<JobRecord | null> {
     await writeJobToDisk(id, failed);
     return failed;
   }
+
+  const now = Date.now();
+  if (state.nextPollAt && now < state.nextPollAt) return record;
+
   try {
     const result = await getAgnesResultOnce(state.ids, apiKey());
     if (result.kind === "waiting") {
-      const updated = { ...record, progress: result.progress, updatedAt: Date.now() };
+      const retryAfterMs = result.retryAfterMs ?? AGNES_STATUS_POLL_INTERVAL_MS;
+      const updated = {
+        ...record,
+        progress: Math.max(record.progress ?? 0, result.progress),
+        updatedAt: now,
+        providerState: {
+          ...state,
+          nextPollAt: now + Math.max(AGNES_STATUS_POLL_INTERVAL_MS, retryAfterMs),
+        } satisfies AgnesJobState,
+      };
       await writeJobToDisk(id, updated);
       return updated;
     }
-    const completed = { ...record, status: "completed" as const, progress: 100, video_url: result.url, updatedAt: Date.now() };
+    const completed = { ...record, status: "completed" as const, progress: 100, video_url: result.url, updatedAt: now };
     await writeJobToDisk(id, completed);
     return completed;
   } catch (error) {
@@ -205,11 +222,19 @@ export async function refreshAgnesJob(id: string): Promise<JobRecord | null> {
       status: "failed" as const,
       progress: 100,
       error: error instanceof Error ? error.message : String(error),
-      updatedAt: Date.now(),
+      updatedAt: now,
     };
     await writeJobToDisk(id, failed);
     return failed;
   }
+}
+
+export async function refreshAgnesJob(id: string): Promise<JobRecord | null> {
+  const existing = refreshes.get(id);
+  if (existing) return existing;
+  const refresh = refreshAgnesJobOnce(id).finally(() => refreshes.delete(id));
+  refreshes.set(id, refresh);
+  return refresh;
 }
 
 export { decodeTaskId, readJobFromDisk, writeJobToDisk };
