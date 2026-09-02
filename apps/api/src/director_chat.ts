@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { config } from "./config.js";
 import { runGeminiDirectorWithFallback } from "./gemini_director_retry.js";
-import { buildLocalDirectorChatResponse, type LocalDirectorChatShot } from "./director_chat_local.js";
+import { buildLocalDirectorChatResponse, type LocalDirectorChatShot, type LocalDirectorChatTarget } from "./director_chat_local.js";
 
 const UpdateClipActionSchema = z.object({
   type: z.literal("update_clip"),
@@ -70,7 +70,7 @@ const DirectorChatResponseSchema = z.object({
 
 type DirectorChatContext = {
   userMessage: string;
-  lockedTarget?: z.infer<typeof DirectorChatTargetSchema>;
+  lockedTarget?: LocalDirectorChatTarget;
   recentConversation: unknown;
   currentPlan: unknown;
   availableReferences: unknown;
@@ -151,7 +151,7 @@ async function callGeminiChat(context: DirectorChatContext, model: string): Prom
   return JSON.parse(responseText);
 }
 
-function expectedActionType(target: z.infer<typeof DirectorChatTargetSchema>): DirectorEditAction["type"] {
+function expectedActionType(target: LocalDirectorChatTarget): DirectorEditAction["type"] {
   if (target.type === "scene_image") return "edit_scene_image";
   if (target.type === "shot_image") return "edit_shot_image";
   return "update_clip";
@@ -159,9 +159,12 @@ function expectedActionType(target: z.infer<typeof DirectorChatTargetSchema>): D
 
 export async function chatWithDirector(rawRequest: unknown): Promise<z.infer<typeof DirectorChatResponseSchema>> {
   const req = DirectorChatRequestSchema.parse(rawRequest);
+  const lockedTarget: LocalDirectorChatTarget | undefined = req.target?.type && req.target.clipId
+    ? { type: req.target.type, clipId: req.target.clipId }
+    : undefined;
   const validClipIds = new Set(req.plan.shots.map((shot) => shot.clipId));
-  if (req.target && !validClipIds.has(req.target.clipId)) {
-    throw new Error(`Director chat target referenced unknown clipId ${req.target.clipId}.`);
+  if (lockedTarget && !validClipIds.has(lockedTarget.clipId)) {
+    throw new Error(`Director chat target referenced unknown clipId ${lockedTarget.clipId}.`);
   }
   const validReferenceIds = new Set(req.references.map((reference) => reference.id));
   const localShots: LocalDirectorChatShot[] = req.plan.shots.map((shot) => ({
@@ -176,7 +179,7 @@ export async function chatWithDirector(rawRequest: unknown): Promise<z.infer<typ
 
   const localFallback = () => DirectorChatResponseSchema.parse(buildLocalDirectorChatResponse({
     message: req.message,
-    target: req.target,
+    target: lockedTarget,
     plan: { shots: localShots },
   }));
 
@@ -184,7 +187,7 @@ export async function chatWithDirector(rawRequest: unknown): Promise<z.infer<typ
 
   const context: DirectorChatContext = {
     userMessage: req.message,
-    lockedTarget: req.target,
+    lockedTarget,
     recentConversation: req.history,
     currentPlan: req.plan,
     availableReferences: req.references,
@@ -203,7 +206,7 @@ export async function chatWithDirector(rawRequest: unknown): Promise<z.infer<typ
 
     for (const action of parsed.actions) {
       if (!validClipIds.has(action.clipId)) throw new Error(`Director chat referenced unknown clipId ${action.clipId}.`);
-      if (req.target && (action.clipId !== req.target.clipId || action.type !== expectedActionType(req.target))) {
+      if (lockedTarget && (action.clipId !== lockedTarget.clipId || action.type !== expectedActionType(lockedTarget))) {
         throw new Error("Director chat violated its locked asset target.");
       }
       if (action.type === "update_clip" && action.conditioningReferenceId && !validReferenceIds.has(action.conditioningReferenceId)) {
