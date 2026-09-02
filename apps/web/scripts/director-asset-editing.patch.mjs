@@ -71,16 +71,16 @@ export function patchDirectorAssetEditing(source, replaceRequired) {
         updateClip(action.clipId, { prompt: nextShot.prompt, sectionLabel: nextShot.sectionLabel });
         if (action.regenerate) {
           setSession((current) => ({ ...current, pendingAssetEdits: { ...current.pendingAssetEdits, [assetEditKey("clip", action.clipId)]: { targetType: "clip", clipId: action.clipId, regenerate: true } } }));
-          toast.success(`Director prepared ${action.clipId} for regeneration. Press Regenerate when ready.`);
+          toast.success("Director prepared " + action.clipId + " for regeneration. Press Regenerate when ready.");
         } else {
-          toast.success(`Director updated ${action.clipId}. No media was regenerated.`);
+          toast.success("Director updated " + action.clipId + ". No media was regenerated.");
         }
         continue;
       }
 
       const targetType = action.type === "edit_scene_image" ? "scene_image" : "shot_image";
       setSession((current) => ({ ...current, pendingAssetEdits: { ...current.pendingAssetEdits, [assetEditKey(targetType, action.clipId)]: { targetType, clipId: action.clipId, prompt: action.prompt } } }));
-      toast.success(`Director prepared the ${targetType === "scene_image" ? "scene" : "shot"} image edit. Press Generate edited image when ready.`);
+      toast.success("Director prepared the " + (targetType === "scene_image" ? "scene" : "shot") + " image edit. Press Generate edited image when ready.");
     }
   };
 `;
