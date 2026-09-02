@@ -150,7 +150,17 @@ export async function chatWithDirector(rawRequest: unknown): Promise<z.infer<typ
 
   const localFallback = () => DirectorChatResponseSchema.parse(buildLocalDirectorChatResponse({
     message: req.message,
-    plan: { shots: req.plan.shots },
+    plan: {
+      shots: req.plan.shots.map((shot) => ({
+        clipId: String(shot.clipId),
+        sectionLabel: shot.sectionLabel,
+        start: shot.start,
+        end: shot.end,
+        prompt: shot.prompt,
+        continuityNotes: shot.continuityNotes,
+        transition: shot.transition,
+      })),
+    },
   }));
 
   if (!config.GEMINI_API_KEY) return localFallback();
