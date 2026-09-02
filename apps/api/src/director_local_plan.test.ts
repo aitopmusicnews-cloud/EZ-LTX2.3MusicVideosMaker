@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 
 const localPlanModule = await import("./director_local_plan.js").catch(() => null);
 
@@ -47,4 +48,11 @@ test("local fallback preserves one shot per exact supplied clip", () => {
 
   assert.equal(plan.shots.length, 8);
   assert.deepEqual(plan.shots.map((shot: any) => [shot.clipId, shot.start, shot.end]), clips.map((clip) => [clip.id, clip.start, clip.end]));
+});
+
+test("API build preserves userDirection and falls back locally after Gemini exhaustion", async () => {
+  const buildSource = await readFile(new URL("../scripts/build.mjs", import.meta.url), "utf8");
+  assert.match(buildSource, /userDirection/);
+  assert.match(buildSource, /buildLocalDirectorPlan/);
+  assert.match(buildSource, /local-vision-fallback|Gemini.*local/i);
 });
