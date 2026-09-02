@@ -1,25 +1,61 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import { isTransientGeminiFailure, runGeminiDirectorWithFallback } from "./gemini_director_retry.js";
 
-const source = await readFile(new URL("./director_agent.ts", import.meta.url), "utf8");
-
-test("Gemini Director retries transient capacity and transport failures", () => {
-  assert.match(source, /isTransientGeminiFailure/);
-  assert.match(source, /429|RESOURCE_EXHAUSTED/);
-  assert.match(source, /503|UNAVAILABLE/);
-  assert.match(source, /high demand/i);
-  assert.match(source, /Headers Timeout|HeadersTimeout|fetch failed/i);
-  assert.match(source, /setTimeout/);
+test("Gemini Director recognizes provider capacity and transport failures as transient", () => {
+  assert.equal(isTransientGeminiFailure(Object.assign(new Error("RESOURCE_EXHAUSTED"), { status: 429 })), true);
+  assert.equal(isTransientGeminiFailure(Object.assign(new Error("UNAVAILABLE: high demand"), { status: 503 })), true);
+  assert.equal(isTransientGeminiFailure(new Error("fetch failed: Headers Timeout Error")), true);
+  assert.equal(isTransientGeminiFailure(new Error("invalid API key")), false);
 });
 
-test("Gemini Director falls back to stable 2.5 Flash after primary capacity failures", () => {
-  assert.match(source, /gemini-2\.5-flash/);
-  assert.match(source, /modelCandidates/);
-  assert.match(source, /for \(const candidateModel of modelCandidates\)/);
+test("Gemini Director retries the primary model before falling back", async () => {
+  const calls: string[] = [];
+  let primaryAttempts = 0;
+  const result = await runGeminiDirectorWithFallback("gemini-primary", async (model) => {
+    calls.push(model);
+    if (model === "gemini-primary") {
+      primaryAttempts += 1;
+      if (primaryAttempts === 1) throw new Error("This model is currently experiencing high demand");
+      return "primary recovered";
+    }
+    return "fallback";
+  }, { retriesPerModel: 2, baseDelayMs: 0 });
+
+  assert.equal(result.value, "primary recovered");
+  assert.equal(result.model, "gemini-primary");
+  assert.deepEqual(calls, ["gemini-primary", "gemini-primary"]);
 });
 
-test("Gemini Director reports which model actually produced the plan", () => {
-  assert.match(source, /successfulModel/);
-  assert.match(source, /agentModel:\s*successfulModel/);
+test("Gemini Director uses stable 2.5 Flash when the primary remains capacity-limited", async () => {
+  const calls: string[] = [];
+  const result = await runGeminiDirectorWithFallback("gemini-primary", async (model) => {
+    calls.push(model);
+    if (model === "gemini-primary") throw Object.assign(new Error("UNAVAILABLE: high demand"), { status: 503 });
+    return "fallback plan";
+  }, { retriesPerModel: 2, baseDelayMs: 0 });
+
+  assert.equal(result.value, "fallback plan");
+  assert.equal(result.model, "gemini-2.5-flash");
+  assert.deepEqual(calls, ["gemini-primary", "gemini-primary", "gemini-2.5-flash"]);
+});
+
+test("non-transient Gemini errors do not fan out to fallback models", async () => {
+  const calls: string[] = [];
+  await assert.rejects(
+    runGeminiDirectorWithFallback("gemini-primary", async (model) => {
+      calls.push(model);
+      throw new Error("Gemini Director failed: invalid API key");
+    }, { retriesPerModel: 2, baseDelayMs: 0 }),
+    /invalid API key/,
+  );
+  assert.deepEqual(calls, ["gemini-primary"]);
+});
+
+test("API build wires resilient Gemini results into the Director plan and reports the successful model", async () => {
+  const buildSource = await readFile(new URL("../scripts/build.mjs", import.meta.url), "utf8");
+  assert.match(buildSource, /runGeminiDirectorWithFallback/);
+  assert.match(buildSource, /successfulModel/);
+  assert.match(buildSource, /agentModel: successfulModel/);
 });
