@@ -1,7 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import { patchOptionalCharacterConditioning } from "../../scripts/optional-character-conditioning.patch.mjs";
+import { patchDirectorChat } from "../../scripts/director-chat-patch.mjs";
 import { patchDirectorLeftRailLauncher } from "../../scripts/left-rail-tools.patch.mjs";
+import { patchDirectorMultiCharacter } from "../../scripts/director-multichar.patch.mjs";
 
 const source = await readFile(new URL("./LtxDirectorAgent.tsx", import.meta.url), "utf8");
 const leftRailSource = await readFile(new URL("./LeftRail.tsx", import.meta.url), "utf8");
@@ -9,7 +12,10 @@ const replaceRequired = (input: string, from: string, to: string, label: string)
   assert.ok(input.includes(from), `missing patch anchor: ${label}`);
   return input.replace(from, to);
 };
-const patched = patchDirectorLeftRailLauncher(source, replaceRequired);
+let patched = patchOptionalCharacterConditioning(source, replaceRequired);
+patched = patchDirectorChat(patched, replaceRequired);
+patched = patchDirectorLeftRailLauncher(patched, replaceRequired);
+patched = patchDirectorMultiCharacter(patched, replaceRequired);
 
 test("the left-rail Director parses structured Vision before choosing timeline clips", () => {
   assert.match(patched, /parseDirectorVision/);
@@ -24,7 +30,7 @@ test("the left-rail Director sends Vision-derived clips to the Director API", ()
 
 test("structured Vision replaces stale analyzer clips before plan approval", () => {
   assert.match(patched, /useStore\.setState\(\{ clips: planningClips/);
-  assert.match(patched, /const SESSION_VERSION = 3/);
+  assert.match(patched, /const SESSION_VERSION = 4/);
   assert.match(patched, /Vision override detected:/);
 });
 
