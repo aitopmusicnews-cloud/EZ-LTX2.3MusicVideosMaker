@@ -28,8 +28,14 @@ export const DirectorEditActionSchema = z.discriminatedUnion("type", [
 
 export type DirectorEditAction = z.infer<typeof DirectorEditActionSchema>;
 
+const DirectorChatTargetSchema = z.object({
+  type: z.enum(["scene_image", "shot_image", "clip"]),
+  clipId: z.string().min(1),
+});
+
 const DirectorChatRequestSchema = z.object({
   message: z.string().trim().min(2).max(4000),
+  target: DirectorChatTargetSchema.optional(),
   plan: z.object({
     treatment: z.unknown().optional(),
     characterBible: z.unknown().optional(),
@@ -64,6 +70,7 @@ const DirectorChatResponseSchema = z.object({
 
 type DirectorChatContext = {
   userMessage: string;
+  lockedTarget?: z.infer<typeof DirectorChatTargetSchema>;
   recentConversation: unknown;
   currentPlan: unknown;
   availableReferences: unknown;
@@ -100,6 +107,7 @@ function systemInstruction(): string {
     "For update_clip use only an existing clipId. Include only fields the user asked to change. Set regenerate=true only when the user explicitly asks to regenerate/re-render/retry that video clip.",
     "For edit_scene_image or edit_shot_image, write a complete image-generation prompt describing the requested revision while preserving everything the user did not ask to change.",
     "Never invent clip IDs or reference IDs. Never delete clips. Never change clip timing.",
+    "If lockedTarget is present in the supplied context, every action must use exactly lockedTarget.clipId. For scene_image targets return only edit_scene_image actions; for shot_image return only edit_shot_image actions; for clip return only update_clip actions.",
     "If the request is ambiguous, return a helpful reply with no actions and ask the user to identify the clip or image.",
     "Be concise in reply and describe exactly what will be changed.",
   ].join(" ");
@@ -143,9 +151,18 @@ async function callGeminiChat(context: DirectorChatContext, model: string): Prom
   return JSON.parse(responseText);
 }
 
+function expectedActionType(target: z.infer<typeof DirectorChatTargetSchema>): DirectorEditAction["type"] {
+  if (target.type === "scene_image") return "edit_scene_image";
+  if (target.type === "shot_image") return "edit_shot_image";
+  return "update_clip";
+}
+
 export async function chatWithDirector(rawRequest: unknown): Promise<z.infer<typeof DirectorChatResponseSchema>> {
   const req = DirectorChatRequestSchema.parse(rawRequest);
   const validClipIds = new Set(req.plan.shots.map((shot) => shot.clipId));
+  if (req.target && !validClipIds.has(req.target.clipId)) {
+    throw new Error(`Director chat target referenced unknown clipId ${req.target.clipId}.`);
+  }
   const validReferenceIds = new Set(req.references.map((reference) => reference.id));
   const localShots: LocalDirectorChatShot[] = req.plan.shots.map((shot) => ({
     clipId: String(shot.clipId),
@@ -159,6 +176,7 @@ export async function chatWithDirector(rawRequest: unknown): Promise<z.infer<typ
 
   const localFallback = () => DirectorChatResponseSchema.parse(buildLocalDirectorChatResponse({
     message: req.message,
+    target: req.target,
     plan: { shots: localShots },
   }));
 
@@ -166,6 +184,7 @@ export async function chatWithDirector(rawRequest: unknown): Promise<z.infer<typ
 
   const context: DirectorChatContext = {
     userMessage: req.message,
+    lockedTarget: req.target,
     recentConversation: req.history,
     currentPlan: req.plan,
     availableReferences: req.references,
@@ -184,6 +203,9 @@ export async function chatWithDirector(rawRequest: unknown): Promise<z.infer<typ
 
     for (const action of parsed.actions) {
       if (!validClipIds.has(action.clipId)) throw new Error(`Director chat referenced unknown clipId ${action.clipId}.`);
+      if (req.target && (action.clipId !== req.target.clipId || action.type !== expectedActionType(req.target))) {
+        throw new Error("Director chat violated its locked asset target.");
+      }
       if (action.type === "update_clip" && action.conditioningReferenceId && !validReferenceIds.has(action.conditioningReferenceId)) {
         throw new Error(`Director chat referenced unknown conditioning asset ${action.conditioningReferenceId}.`);
       }
