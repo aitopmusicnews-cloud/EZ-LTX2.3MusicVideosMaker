@@ -5,6 +5,8 @@ import { patchOptionalCharacterConditioning } from "../../scripts/optional-chara
 import { patchDirectorChat } from "../../scripts/director-chat-patch.mjs";
 import { patchDirectorLeftRailLauncher } from "../../scripts/left-rail-tools.patch.mjs";
 import { patchDirectorMultiCharacter } from "../../scripts/director-multichar.patch.mjs";
+import { patchDirectorAssetEditing } from "../../scripts/director-asset-editing.patch.mjs";
+import { patchDirectorCharacterIdentity } from "../../scripts/director-character-identity.patch.mjs";
 
 const source = await readFile(new URL("./LtxDirectorAgent.tsx", import.meta.url), "utf8");
 const replaceRequired = (input: string, from: string, to: string, label: string) => {
@@ -16,6 +18,8 @@ let patched = patchOptionalCharacterConditioning(source, replaceRequired);
 patched = patchDirectorChat(patched, replaceRequired);
 patched = patchDirectorLeftRailLauncher(patched, replaceRequired);
 patched = patchDirectorMultiCharacter(patched, replaceRequired);
+patched = patchDirectorAssetEditing(patched, replaceRequired);
+patched = patchDirectorCharacterIdentity(patched, replaceRequired);
 
 test("the shipped active Director uses session v4 multi-character state", () => {
   assert.match(patched, /const SESSION_VERSION = 4/);
@@ -43,7 +47,24 @@ test("pending asset edits use target type plus clip ID so scene shot and clip ed
 test("approval images accept multiple reference URLs", () => {
   assert.match(patched, /generateApprovalImage\(prompt: string, referenceUrls: string\[\] = \[\]\)/);
   assert.match(patched, /buildApprovalReferenceImages/);
-  assert.match(patched, /resolveCharacterReferenceUrls/);
+  assert.match(patched, /resolveCharacterIdentities/);
+});
+
+test("multi-character image prompts explicitly bind each identity to its reference image", () => {
+  assert.match(patched, /buildCharacterIdentityInstruction/);
+  assert.match(patched, /selectedCharactersForShot/);
+  assert.match(patched, /sceneIdentityInstruction/);
+  assert.match(patched, /shotIdentityInstruction/);
+});
+
+test("prepared image edits preserve the same character identity bindings", () => {
+  assert.match(patched, /preparedCharacters/);
+  assert.match(patched, /preparedIdentityInstruction/);
+  assert.match(patched, /pending\.prompt.*preparedIdentityInstruction|preparedIdentityInstruction.*pending\.prompt/s);
+});
+
+test("the project-character alias is hidden when a named character already uses the same image", () => {
+  assert.match(patched, /!options\.some\(\(option\) => option\.url === characterImageUrl\)/);
 });
 
 test("character-required video generation uses only an approved shot image as the Agnes seed", () => {
