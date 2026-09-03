@@ -13,6 +13,13 @@ if (!source.includes(editingImport)) {
   source = source.replace(importAnchor, `${importAnchor}\n${editingImport}`);
 }
 
+const identityImport = 'import { patchDirectorCharacterIdentity } from "./director-character-identity.patch.mjs";';
+const continuityImport = 'import { patchDirectorStrictContinuity } from "./director-strict-continuity.patch.mjs";';
+if (!source.includes(continuityImport)) {
+  if (!source.includes(identityImport)) throw new Error("Could not find Director character-identity build import.");
+  source = source.replace(identityImport, `${identityImport}\n${continuityImport}`);
+}
+
 const callAnchor = "patchedAgent = patchDirectorMultiCharacter(patchedAgent, replaceRequired);";
 const editingCall = "patchedAgent = patchDirectorAssetEditing(patchedAgent, replaceRequired);";
 if (!source.includes(editingCall)) {
@@ -20,10 +27,22 @@ if (!source.includes(editingCall)) {
   source = source.replace(callAnchor, `${callAnchor}\n${editingCall}`);
 }
 
+const identityCall = "patchedAgent = patchDirectorCharacterIdentity(patchedAgent, replaceRequired);";
+const continuityCall = "patchedAgent = patchDirectorStrictContinuity(patchedAgent, replaceRequired);";
+if (!source.includes(continuityCall)) {
+  if (!source.includes(identityCall)) throw new Error("Could not find Director character-identity build call.");
+  source = source.replace(identityCall, `${identityCall}\n${continuityCall}`);
+}
+
 const logAnchor = '  console.log("[web build] Enabled Director session v4 multi-character approvals and legacy migration.");';
 const editingLog = '  console.log("[web build] Enabled target-locked inline asset editing with explicit provider actions.");';
 if (!source.includes(editingLog) && source.includes(logAnchor)) source = source.replace(logAnchor, `${logAnchor}\n${editingLog}`);
 
+const identityLog = '  console.log("[web build] Bound selected character identities to their matching reference images.");';
+const continuityLog = '  console.log("[web build] Hardwired strict continuity for skin tone, wardrobe, props, equipment, and recurring visual details.");';
+if (!source.includes(continuityLog) && source.includes(identityLog)) source = source.replace(identityLog, `${identityLog}\n${continuityLog}`);
+
 if (!source.includes(editingImport) || !source.includes(editingCall)) throw new Error("Director asset-editing build injection did not apply.");
+if (!source.includes(continuityImport) || !source.includes(continuityCall)) throw new Error("Director strict-continuity build injection did not apply.");
 await writeFile(buildPath, source, "utf8");
-console.log("[web prebuild] Enabled Director inline asset editing.");
+console.log("[web prebuild] Enabled Director inline asset editing and strict continuity.");
