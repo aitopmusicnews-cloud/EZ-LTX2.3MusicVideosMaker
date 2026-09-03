@@ -8,6 +8,7 @@ import { patchDirectorAgentRuntime, patchDirectorReferenceChat } from "./directo
 import { patchOptionalCharacterConditioning } from "./optional-character-conditioning.patch.mjs";
 import { patchDirectorChat } from "./director-chat-patch.mjs";
 import { patchDirectorMultiCharacter } from "./director-multichar.patch.mjs";
+import { patchDirectorCharacterIdentity } from "./director-character-identity.patch.mjs";
 import { patchAnalyzerDefinedClips, patchLongSectionApi, patchLongSectionScheduler } from "./analyzer-section-workflow.patch.mjs";
 import { patchDirectorAssetPersistence } from "./director-assets.patch.mjs";
 import { patchSocialExport } from "./social-export.patch.mjs";
@@ -89,6 +90,7 @@ let patchedAgent = patchOptionalCharacterConditioning(originalAgent, replaceRequ
 patchedAgent = patchDirectorChat(patchedAgent, replaceRequired);
 patchedAgent = patchDirectorLeftRailLauncher(patchedAgent, replaceRequired);
 patchedAgent = patchDirectorMultiCharacter(patchedAgent, replaceRequired);
+patchedAgent = patchDirectorCharacterIdentity(patchedAgent, replaceRequired);
 let patchedReferenceChat = patchDirectorReferenceChat(originalReferenceChat, replaceRequired);
 patchedReferenceChat = patchDirectorAssetPersistence(patchedReferenceChat);
 patchedReferenceChat = patchReferenceLeftRailLauncher(patchedReferenceChat);
@@ -114,6 +116,7 @@ try {
   console.log("[web build] Moved Director, References, and Promo launchers into the left rail so the timeline stays clear.");
   console.log("[web build] Enabled Director chat, reusable assets, and section-by-section credit-protected approval.");
   console.log("[web build] Enabled Director session v4 multi-character approvals and legacy migration.");
+  console.log("[web build] Bound selected character identities to their matching reference images.");
   await run("tsc", ["--noEmit"]);
   await run("vite", ["build"]);
 } finally {
