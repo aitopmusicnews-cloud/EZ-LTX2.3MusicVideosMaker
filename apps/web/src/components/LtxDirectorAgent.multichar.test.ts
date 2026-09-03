@@ -5,6 +5,7 @@ import { patchOptionalCharacterConditioning } from "../../scripts/optional-chara
 import { patchDirectorChat } from "../../scripts/director-chat-patch.mjs";
 import { patchDirectorLeftRailLauncher } from "../../scripts/left-rail-tools.patch.mjs";
 import { patchDirectorMultiCharacter } from "../../scripts/director-multichar.patch.mjs";
+import { patchDirectorAssetEditing } from "../../scripts/director-asset-editing.patch.mjs";
 import { patchDirectorCharacterIdentity } from "../../scripts/director-character-identity.patch.mjs";
 
 const source = await readFile(new URL("./LtxDirectorAgent.tsx", import.meta.url), "utf8");
@@ -17,6 +18,7 @@ let patched = patchOptionalCharacterConditioning(source, replaceRequired);
 patched = patchDirectorChat(patched, replaceRequired);
 patched = patchDirectorLeftRailLauncher(patched, replaceRequired);
 patched = patchDirectorMultiCharacter(patched, replaceRequired);
+patched = patchDirectorAssetEditing(patched, replaceRequired);
 patched = patchDirectorCharacterIdentity(patched, replaceRequired);
 
 test("the shipped active Director uses session v4 multi-character state", () => {
@@ -53,6 +55,12 @@ test("multi-character image prompts explicitly bind each identity to its referen
   assert.match(patched, /selectedCharactersForShot/);
   assert.match(patched, /sceneIdentityInstruction/);
   assert.match(patched, /shotIdentityInstruction/);
+});
+
+test("prepared image edits preserve the same character identity bindings", () => {
+  assert.match(patched, /preparedCharacters/);
+  assert.match(patched, /preparedIdentityInstruction/);
+  assert.match(patched, /pending\.prompt.*preparedIdentityInstruction|preparedIdentityInstruction.*pending\.prompt/s);
 });
 
 test("the project-character alias is hidden when a named character already uses the same image", () => {
