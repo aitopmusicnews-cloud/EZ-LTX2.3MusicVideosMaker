@@ -48,7 +48,7 @@ test("two selected people retain separate named identity bindings for the image 
   const instruction = buildCharacterIdentityInstruction(identities, ["/one.png", "/two.png"]);
   assert.match(instruction, /Reference image 1.*Character One/i);
   assert.match(instruction, /Reference image 2.*Character Two/i);
-  assert.match(instruction, /two distinct people/i);
+  assert.match(instruction, /2 selected characters as distinct people|two distinct people/i);
   assert.match(instruction, /do not.*duplicate|never.*duplicate/i);
 });
 
