@@ -43,7 +43,18 @@ test("pending asset edits use target type plus clip ID so scene shot and clip ed
 test("approval images accept multiple reference URLs", () => {
   assert.match(patched, /generateApprovalImage\(prompt: string, referenceUrls: string\[\] = \[\]\)/);
   assert.match(patched, /buildApprovalReferenceImages/);
-  assert.match(patched, /resolveCharacterReferenceUrls/);
+  assert.match(patched, /resolveCharacterReferenceUrls|resolveCharacterIdentities/);
+});
+
+test("multi-character image prompts explicitly bind each identity to its reference image", () => {
+  assert.match(patched, /buildCharacterIdentityInstruction/);
+  assert.match(patched, /selectedCharactersForShot/);
+  assert.match(patched, /sceneIdentityInstruction/);
+  assert.match(patched, /shotIdentityInstruction/);
+});
+
+test("the project-character alias is hidden when a named character already uses the same image", () => {
+  assert.match(patched, /!options\.some\(\(option\) => option\.url === characterImageUrl\)/);
 });
 
 test("character-required video generation uses only an approved shot image as the Agnes seed", () => {
