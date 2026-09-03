@@ -2,7 +2,7 @@ name: Build Check
 
 on:
   push:
-    branches: [main, backup-pre-rollback-1890d80, feature/director-vision-first-clips, fix/director-no-silent-fallback, feature/director-editable-clip-count, fix/gemini-director-capacity-retry, fix/director-local-fallback, fix/director-chat-quota-fallback, feature/director-asset-chat-multichar, fix/director-script-lock]
+    branches: [main, backup-pre-rollback-1890d80, feature/director-vision-first-clips, fix/director-no-silent-fallback, feature/director-editable-clip-count, fix/gemini-director-capacity-retry, fix/director-local-fallback, fix/director-chat-quota-fallback, feature/director-asset-chat-multichar, fix/director-script-lock, fix/director-character-identity-lock]
   pull_request:
     branches: [main, backup-pre-rollback-1890d80]
 
