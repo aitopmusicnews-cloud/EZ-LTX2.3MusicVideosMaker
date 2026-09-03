@@ -84,8 +84,17 @@ test("scene and shot images carry a prior approved continuity anchor and strict 
   assert.match(patched, /shotStrictContinuityInstruction/);
 });
 
+test("project-wide props and equipment use the nearest approved project anchor even when characters change", () => {
+  assert.match(patched, /findPriorApprovedProjectAnchor/);
+  assert.match(patched, /projectContinuityAnchorForShot/);
+  assert.match(patched, /sceneProjectAnchor/);
+  assert.match(patched, /shotProjectAnchor/);
+  assert.match(patched, /projectAnchorUrl/);
+});
+
 test("prepared image edits cannot bypass strict continuity", () => {
   assert.match(patched, /preparedContinuityAnchor/);
+  assert.match(patched, /preparedProjectAnchor/);
   assert.match(patched, /preparedStrictContinuityInstruction/);
   assert.match(patched, /pending\.prompt.*preparedStrictContinuityInstruction|preparedStrictContinuityInstruction.*pending\.prompt/s);
 });
