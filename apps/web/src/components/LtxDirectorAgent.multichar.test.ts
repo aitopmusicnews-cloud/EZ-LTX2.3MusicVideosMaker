@@ -7,6 +7,7 @@ import { patchDirectorLeftRailLauncher } from "../../scripts/left-rail-tools.pat
 import { patchDirectorMultiCharacter } from "../../scripts/director-multichar.patch.mjs";
 import { patchDirectorAssetEditing } from "../../scripts/director-asset-editing.patch.mjs";
 import { patchDirectorCharacterIdentity } from "../../scripts/director-character-identity.patch.mjs";
+import { patchDirectorStrictContinuity } from "../../scripts/director-strict-continuity.patch.mjs";
 
 const source = await readFile(new URL("./LtxDirectorAgent.tsx", import.meta.url), "utf8");
 const replaceRequired = (input: string, from: string, to: string, label: string) => {
@@ -20,6 +21,7 @@ patched = patchDirectorLeftRailLauncher(patched, replaceRequired);
 patched = patchDirectorMultiCharacter(patched, replaceRequired);
 patched = patchDirectorAssetEditing(patched, replaceRequired);
 patched = patchDirectorCharacterIdentity(patched, replaceRequired);
+patched = patchDirectorStrictContinuity(patched, replaceRequired);
 
 test("the shipped active Director uses session v4 multi-character state", () => {
   assert.match(patched, /const SESSION_VERSION = 4/);
@@ -71,4 +73,39 @@ test("character-required video generation uses only an approved shot image as th
   assert.match(patched, /chooseApprovedShotSeed\(session\.shotApprovals\[clipId\]\)/);
   assert.match(patched, /needs an approved shot image before video generation/);
   assert.match(patched, /seedImageUrl: approvedShotSeed/);
+});
+
+test("scene and shot images carry a prior approved continuity anchor and strict lock", () => {
+  assert.match(patched, /findPriorApprovedContinuityAnchor/);
+  assert.match(patched, /buildStrictContinuityInstruction/);
+  assert.match(patched, /sceneContinuityAnchor/);
+  assert.match(patched, /shotContinuityAnchor/);
+  assert.match(patched, /sceneStrictContinuityInstruction/);
+  assert.match(patched, /shotStrictContinuityInstruction/);
+});
+
+test("project-wide props and equipment use the nearest approved project anchor even when characters change", () => {
+  assert.match(patched, /findPriorApprovedProjectAnchor/);
+  assert.match(patched, /projectContinuityAnchorForShot/);
+  assert.match(patched, /sceneProjectAnchor/);
+  assert.match(patched, /shotProjectAnchor/);
+  assert.match(patched, /projectAnchorUrl/);
+});
+
+test("prepared image edits cannot bypass strict continuity", () => {
+  assert.match(patched, /preparedContinuityAnchor/);
+  assert.match(patched, /preparedProjectAnchor/);
+  assert.match(patched, /preparedStrictContinuityInstruction/);
+  assert.match(patched, /pending\.prompt.*preparedStrictContinuityInstruction|preparedStrictContinuityInstruction.*pending\.prompt/s);
+});
+
+test("Agnes section generation hard-locks the approved shot seed across every frame and segment", () => {
+  assert.match(patched, /buildStrictVideoContinuityInstruction/);
+  assert.match(patched, /videoContinuityInstruction/);
+  assert.match(patched, /prompt:.*videoContinuityInstruction|videoContinuityInstruction.*prompt:/s);
+});
+
+test("Director visibly reports that strict continuity is always active", () => {
+  assert.match(patched, /Strict continuity lock active/i);
+  assert.match(patched, /skin tone.*wardrobe.*props.*equipment/is);
 });
