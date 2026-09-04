@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   buildAgnesGenerationInstruction,
   buildScriptLockedImageReferenceUrls,
+  buildScriptLockedVideoSegmentInputs,
   prepareScriptLockedVideoGeneration,
 } from "./directorScriptLockedGeneration.js";
 
@@ -71,4 +72,28 @@ test("character-selected video requires the approved current shot image and uses
   assert.equal(ready.input.seedImageUrl, "/shot.png");
   assert.equal(ready.input.source, "imageToVideo");
   assert.match(ready.input.prompt, /^Character 1 walks/);
+});
+
+
+test("long Script-Locked shots split duration only and keep identical prompt and seed lineage", () => {
+  const segments = buildScriptLockedVideoSegmentInputs({
+    clipId: "vision-shot-1-0-120",
+    source: "imageToVideo",
+    seedImageUrl: "/approved-shot.png",
+    prompt: "Character 1 crosses the room while the camera tracks right. Keep the red suit unchanged.",
+    duration: 12,
+    sectionLabel: "Shot 1",
+    energy: 0.65,
+    model: "agnes-video-v2.0",
+  });
+
+  assert.equal(segments.length, 3);
+  assert.deepEqual(segments.map((segment) => segment.duration), [4, 4, 4]);
+  assert.deepEqual(segments.map((segment) => segment.clipId), [
+    "vision-shot-1-0-120",
+    "vision-shot-1-0-120-segment-2",
+    "vision-shot-1-0-120-segment-3",
+  ]);
+  assert.ok(segments.every((segment) => segment.prompt === segments[0]!.prompt));
+  assert.ok(segments.every((segment) => segment.seedImageUrl === "/approved-shot.png"));
 });
