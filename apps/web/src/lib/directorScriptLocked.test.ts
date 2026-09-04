@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildScriptLockedShots, migrateLegacyDirectorAssets } from "./directorScriptLocked.js";
+import { buildScriptLockedShots, materializeScriptLockedTimeline, migrateLegacyDirectorAssets } from "./directorScriptLocked.js";
 
 
 test("timecoded Vision yields exact source shots", () => {
@@ -26,6 +26,40 @@ test("Script-Locked clip IDs exactly match structured Vision timeline materializ
     "vision-shot-1-120-180",
     "vision-shot-2-180-230",
   ]);
+});
+
+
+test("materialization uses exact Vision clips and preserves matching ready media", () => {
+  const vision = `00:12–00:18\nShot 1: Character 1 walks to the window.\n00:18–00:23\nShot 2: Character 2 remains at the piano.`;
+  const existing = [
+    {
+      id: "vision-shot-1-120-180",
+      start: 12,
+      end: 18,
+      source: "imageToVideo" as const,
+      status: "ready" as const,
+      videoUrl: "/existing.mp4",
+      prompt: "legacy generic prompt",
+      seedImageUrl: "/approved-shot.png",
+    },
+    {
+      id: "analyzer-old",
+      start: 0,
+      end: 5,
+      source: "textToVideo" as const,
+      status: "empty" as const,
+    },
+  ];
+
+  const clips = materializeScriptLockedTimeline(vision, existing as any);
+  assert.deepEqual(clips.map((clip) => clip.id), [
+    "vision-shot-1-120-180",
+    "vision-shot-2-180-230",
+  ]);
+  assert.equal(clips[0]!.videoUrl, "/existing.mp4");
+  assert.equal(clips[0]!.status, "ready");
+  assert.equal(clips[0]!.prompt, undefined);
+  assert.equal(clips[1]!.status, "empty");
 });
 
 
