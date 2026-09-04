@@ -1,3 +1,4 @@
+import { buildVisionTimelineClips } from "./directorAgentVision.js";
 import { parseDirectorVision } from "./directorVisionParser.js";
 
 export type ScriptLockedReference = {
@@ -143,8 +144,21 @@ export function buildScriptLockedShots(
   const parsed = parseDirectorVision(vision);
   if (parsed.mode !== "structured") return [];
 
+  // Reuse the authoritative structured-Vision materialization path so Script-Locked
+  // compiler IDs always target the exact timeline clips owned by the editor.
+  // No requested clip count is supplied, so structured timecodes cannot be silently
+  // expanded/reduced by a persisted production clip-count preference.
+  const timelineClips = buildVisionTimelineClips(vision, []);
+  if (timelineClips.length !== parsed.shots.length) {
+    throw new Error("Script-Locked source could not preserve the exact structured Vision shot count.");
+  }
+
   return parsed.shots.map((shot, index) => {
-    const clipId = `vision-shot-${index + 1}`;
+    const timelineClip = timelineClips[index];
+    if (!timelineClip || timelineClip.start !== shot.start || timelineClip.end !== shot.end) {
+      throw new Error(`Script-Locked source could not preserve exact timing for shot ${index + 1}.`);
+    }
+    const clipId = timelineClip.id;
     const selectedCharacterIds = uniqueStrings(characterSelections[clipId]);
     const selectedReferenceIds = uniqueStrings([
       ...selectedCharacterIds,
