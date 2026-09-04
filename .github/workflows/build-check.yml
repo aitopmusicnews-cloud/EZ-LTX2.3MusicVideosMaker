@@ -24,7 +24,7 @@ jobs:
       - name: Script-Locked Director Python tests
         run: cd services/videodb-director && python -m pytest tests -q
       - name: Use Node 22
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
