@@ -4,8 +4,8 @@ from flask import Flask, jsonify, request
 from pydantic import ValidationError
 
 from scriptlocked.llm import ReasonerUnavailable
-from scriptlocked.models import CompileRequest
-from scriptlocked.service import compile_project
+from scriptlocked.models import CompileRequest, EditRequest
+from scriptlocked.service import LockedSourceConflict, compile_project, edit_instruction
 
 
 def create_app():
@@ -46,7 +46,21 @@ def create_app():
         denied = require_token()
         if denied:
             return denied
-        return jsonify({"error": "invalid_request"}), 400
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            return jsonify({"error": "invalid_request"}), 400
+        try:
+            edit_request = EditRequest.model_validate(payload)
+            result = edit_instruction(edit_request)
+            return jsonify(result.model_dump()), 200
+        except ValidationError as error:
+            return jsonify({"error": "invalid_request", "details": error.errors()}), 400
+        except LockedSourceConflict as error:
+            return jsonify({"error": "locked_source_conflict", "message": str(error)}), 409
+        except ReasonerUnavailable as error:
+            return jsonify({"error": "reasoner_unavailable", "message": str(error)}), 503
+        except ValueError as error:
+            return jsonify({"error": "fidelity_violation", "message": str(error)}), 422
 
     return app
 
