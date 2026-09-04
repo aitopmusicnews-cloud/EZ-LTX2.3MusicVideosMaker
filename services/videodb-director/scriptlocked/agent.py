@@ -4,7 +4,13 @@ from director.agents.base import AgentResponse, AgentStatus, BaseAgent
 from director.core.session import ContextMessage, RoleTypes
 from director.llm.base import BaseLLM
 
-from .fidelity import allowed_facts_text, validate_no_generic_additions, validate_selected_references
+from .fidelity import (
+    allowed_facts_text,
+    sanitize_reference_description,
+    validate_no_generic_additions,
+    validate_no_unselected_characters,
+    validate_selected_references,
+)
 from .llm import ReasonerUnavailable
 from .models import EditRequest, ScriptLockedReference, ScriptLockedShot
 
@@ -58,11 +64,15 @@ class ScriptLockedAgnesAgent(BaseAgent):
         validate_selected_references(shot, references)
 
         selected_ids = set(shot.selectedReferenceIds) | set(shot.selectedCharacterIds)
-        selected_references = [
-            reference.model_dump()
-            for reference in references
-            if reference.id in selected_ids
-        ]
+        selected_references = []
+        for reference in references:
+            if reference.id not in selected_ids:
+                continue
+            payload = reference.model_dump()
+            if reference.kind != "character":
+                payload["description"] = sanitize_reference_description(shot, reference, references)
+            selected_references.append(payload)
+
         user_payload = {
             "task": "Compile only this shot into an Agnes execution prompt.",
             "shot": shot.model_dump(),
@@ -88,6 +98,7 @@ class ScriptLockedAgnesAgent(BaseAgent):
             continuity_constraints,
         )
         validate_no_generic_additions(prompt, allowed_text)
+        validate_no_unselected_characters(prompt, shot, references)
         return prompt
 
     def edit_prompt(self, edit_request: EditRequest) -> str:
