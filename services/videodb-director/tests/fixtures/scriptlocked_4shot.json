@@ -1,0 +1,76 @@
+{
+  "projectId": "fixture-scriptlocked-4shot",
+  "visionMode": "structured",
+  "shots": [
+    {
+      "clipId": "vision-shot-1-0-50",
+      "start": 0.0,
+      "end": 5.0,
+      "sourceText": "Maya stands beside the white grand piano in her red tailored suit. The silver microphone remains on its stand beside the piano. Camera slowly pushes in.",
+      "visualDirection": "Maya stands beside the white grand piano in her red tailored suit. The silver microphone remains on its stand beside the piano.",
+      "cameraDirection": "Camera slowly pushes in.",
+      "audioCue": "Opening vocal phrase.",
+      "onScreenText": "",
+      "selectedCharacterIds": ["char-maya"],
+      "selectedReferenceIds": ["char-maya", "piano-anchor"]
+    },
+    {
+      "clipId": "vision-shot-2-50-100",
+      "start": 5.0,
+      "end": 10.0,
+      "sourceText": "Jules walks behind the same white grand piano while the silver microphone stays on its stand. Camera pans left with Jules.",
+      "visualDirection": "Jules walks behind the same white grand piano while the silver microphone stays on its stand.",
+      "cameraDirection": "Camera pans left with Jules.",
+      "audioCue": "Percussion enters.",
+      "onScreenText": "",
+      "selectedCharacterIds": ["char-jules"],
+      "selectedReferenceIds": ["char-jules", "piano-anchor"]
+    },
+    {
+      "clipId": "vision-shot-3-100-160",
+      "start": 10.0,
+      "end": 16.0,
+      "sourceText": "Maya returns to the same white grand piano and reaches toward the silver microphone without moving its stand. Camera tracks right. On-screen text: STAY WITH ME.",
+      "visualDirection": "Maya returns to the same white grand piano and reaches toward the silver microphone without moving its stand.",
+      "cameraDirection": "Camera tracks right.",
+      "audioCue": "Chorus begins.",
+      "onScreenText": "STAY WITH ME",
+      "selectedCharacterIds": ["char-maya"],
+      "selectedReferenceIds": ["char-maya", "piano-anchor"]
+    },
+    {
+      "clipId": "vision-shot-4-160-220",
+      "start": 16.0,
+      "end": 22.0,
+      "sourceText": "Maya stands at the silver microphone while Jules sits at the same white grand piano. Maya keeps the red tailored suit and Jules keeps the navy jacket. Camera dollies backward.",
+      "visualDirection": "Maya stands at the silver microphone while Jules sits at the same white grand piano. Maya keeps the red tailored suit and Jules keeps the navy jacket.",
+      "cameraDirection": "Camera dollies backward.",
+      "audioCue": "Chorus continues.",
+      "onScreenText": "",
+      "selectedCharacterIds": ["char-maya", "char-jules"],
+      "selectedReferenceIds": ["char-maya", "char-jules", "piano-anchor"]
+    }
+  ],
+  "references": [
+    {
+      "id": "char-maya",
+      "kind": "character",
+      "name": "Maya",
+      "description": "Black woman with deep brown complexion, shoulder-length natural curls, and a red tailored suit."
+    },
+    {
+      "id": "char-jules",
+      "kind": "character",
+      "name": "Jules",
+      "description": "Man with short dark hair wearing a navy jacket."
+    },
+    {
+      "id": "piano-anchor",
+      "kind": "shot",
+      "name": "Approved piano setup",
+      "description": "The white grand piano and silver microphone on its stand remain in the same positions. Jules is seated behind the piano in the approved project frame."
+    }
+  ],
+  "mustInclude": "",
+  "avoid": ""
+}
