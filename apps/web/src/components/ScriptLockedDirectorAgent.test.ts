@@ -26,3 +26,13 @@ test("compile and edit paths do not call media providers", () => {
   assert.match(source, /editScriptLocked/);
   assert.doesNotMatch(source, /startTextToImage|pollTask|enqueueGeneration/);
 });
+
+
+test("media credits are spent only by explicit Script-Locked buttons", () => {
+  assert.match(source, /Generate shot image/);
+  assert.match(source, /Approve shot image/);
+  assert.match(source, /Generate video|Regenerate video/);
+  assert.match(source, /generateScriptLockedShotImage/);
+  assert.match(source, /queueScriptLockedVideo/);
+  assert.match(source, /prepareScriptLockedVideoGeneration/);
+});
