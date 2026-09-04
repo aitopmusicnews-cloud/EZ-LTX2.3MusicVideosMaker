@@ -3,6 +3,7 @@ import { parseDirectorVision } from "../lib/directorVisionParser.js";
 import {
   buildScriptLockedShots,
   emptyScriptLockedDirectorSession,
+  materializeScriptLockedTimeline,
   migrateLegacyDirectorAssets,
   type ScriptLockedCompiledShot,
   type ScriptLockedDirectorSessionV1,
@@ -10,6 +11,17 @@ import {
 } from "../lib/directorScriptLocked.js";
 import { compileScriptLocked, editScriptLocked } from "../lib/directorScriptLockedClient.js";
 import { setClipCharacterSelection, toggleApprovedCharacter } from "../lib/directorCharacterState.js";
+import {
+  findPriorApprovedContinuityAnchor,
+  findPriorApprovedProjectAnchor,
+} from "../lib/directorContinuityLock.js";
+import {
+  buildAgnesGenerationInstruction,
+  buildScriptLockedImageReferenceUrls,
+  generateScriptLockedShotImage,
+  prepareScriptLockedVideoGeneration,
+  queueScriptLockedVideo,
+} from "../lib/directorScriptLockedGeneration.js";
 import { useStore } from "../lib/store.js";
 import { DirectorCharacterApproval, DirectorCharacterPicker, type CharacterOption } from "./DirectorCharacterControls.js";
 
@@ -18,15 +30,14 @@ const OPEN_EVENT = "mvs-open-ltx-director";
 const ASSISTED_EVENT = "mvs-open-assisted-director";
 const REFERENCE_EVENT = "mvs-director-reference";
 
-type StoredReference = {
-  id?: unknown;
-  kind?: unknown;
-  media?: unknown;
-  name?: unknown;
-  url?: unknown;
-  anchorUrl?: unknown;
-  note?: unknown;
-  status?: unknown;
+type ReadyReferenceItem = {
+  id: string;
+  kind: ScriptLockedReference["kind"];
+  media?: "image" | "video" | "note";
+  name: string;
+  url?: string;
+  anchorUrl?: string;
+  note?: string;
 };
 
 function sessionKey(songId: string): string { return `mvs-scriptlocked-director-v1-${songId}`; }
@@ -80,21 +91,36 @@ function restoreSession(songId: string): ScriptLockedDirectorSessionV1 {
   };
 }
 
-function readReferences(songId: string, characterImageUrl: string | null): ScriptLockedReference[] {
+function readReferenceItems(songId: string): ReadyReferenceItem[] {
   const raw = readJson(referenceKey(songId));
-  const items = Array.isArray(raw) ? raw as StoredReference[] : [];
-  const references: ScriptLockedReference[] = [];
-  for (const item of items) {
+  const items = Array.isArray(raw) ? raw : [];
+  const ready: ReadyReferenceItem[] = [];
+  for (const rawItem of items) {
+    if (!rawItem || typeof rawItem !== "object") continue;
+    const item = rawItem as Record<string, unknown>;
     if (typeof item.id !== "string" || typeof item.name !== "string") continue;
     if (!(["character", "style", "location", "shot", "note"] as const).includes(item.kind as any)) continue;
     if (item.media !== "note" && item.status && item.status !== "ready") continue;
-    references.push({
+    ready.push({
       id: item.id,
       kind: item.kind as ScriptLockedReference["kind"],
+      media: item.media === "image" || item.media === "video" || item.media === "note" ? item.media : undefined,
       name: item.name,
-      description: typeof item.note === "string" && item.note.trim() ? item.note.trim() : item.name,
+      url: typeof item.url === "string" && item.url.trim() ? item.url.trim() : undefined,
+      anchorUrl: typeof item.anchorUrl === "string" && item.anchorUrl.trim() ? item.anchorUrl.trim() : undefined,
+      note: typeof item.note === "string" && item.note.trim() ? item.note.trim() : undefined,
     });
   }
+  return ready;
+}
+
+function compileReferences(items: ReadyReferenceItem[], characterImageUrl: string | null): ScriptLockedReference[] {
+  const references = items.map((item) => ({
+    id: item.id,
+    kind: item.kind,
+    name: item.name,
+    description: item.note || item.name,
+  }));
   if (characterImageUrl && !references.some((reference) => reference.id === "store-character")) {
     references.unshift({
       id: "store-character",
@@ -116,6 +142,7 @@ export function ScriptLockedDirectorAgent() {
   const songId = useStore((state) => state.songId);
   const projectId = useStore((state) => state.projectId);
   const characterImageUrl = useStore((state) => state.characterImageUrl);
+  const timelineClips = useStore((state) => state.clips);
   const [open, setOpen] = useState(false);
   const [session, setSession] = useState<ScriptLockedDirectorSessionV1>(() => emptyScriptLockedDirectorSession());
   const [referenceRevision, setReferenceRevision] = useState(0);
@@ -151,18 +178,27 @@ export function ScriptLockedDirectorAgent() {
     return () => window.removeEventListener(REFERENCE_EVENT, refresh);
   }, []);
 
+  const referenceItems = useMemo(
+    () => songId ? readReferenceItems(songId) : [],
+    [songId, referenceRevision],
+  );
   const references = useMemo(
-    () => songId ? readReferences(songId, characterImageUrl) : [],
-    [songId, characterImageUrl, referenceRevision],
+    () => compileReferences(referenceItems, characterImageUrl),
+    [referenceItems, characterImageUrl],
   );
-  const characters = useMemo<CharacterOption[]>(
-    () => references.filter((reference) => reference.kind === "character").map((reference) => ({
-      id: reference.id,
-      name: reference.name,
-      url: reference.id === "store-character" ? characterImageUrl ?? undefined : undefined,
-    })),
-    [references, characterImageUrl],
-  );
+  const characters = useMemo<CharacterOption[]>(() => {
+    const options = referenceItems
+      .filter((reference) => reference.kind === "character")
+      .map((reference) => ({
+        id: reference.id,
+        name: reference.name,
+        url: reference.anchorUrl || reference.url,
+      }));
+    if (characterImageUrl && !options.some((option) => option.id === "store-character")) {
+      options.unshift({ id: "store-character", name: "Approved project character", url: characterImageUrl });
+    }
+    return options;
+  }, [referenceItems, characterImageUrl]);
   const parsedVision = useMemo(() => parseDirectorVision(session.sourceVision), [session.sourceVision]);
   const shots = useMemo(
     () => buildScriptLockedShots(session.sourceVision, session.characterSelections),
@@ -171,6 +207,12 @@ export function ScriptLockedDirectorAgent() {
 
   if (!SCRIPT_LOCKED_ENABLED || !songId) return null;
   if (!open) return null;
+
+  const referenceUrlForId = (id: string): string | undefined => {
+    if (id === "store-character") return characterImageUrl ?? undefined;
+    const item = referenceItems.find((candidate) => candidate.id === id);
+    return item?.anchorUrl || item?.url;
+  };
 
   const updateSource = (sourceVision: string) => {
     setSession((current) => ({ ...current, sourceVision, compiledByClip: {} }));
@@ -194,6 +236,7 @@ export function ScriptLockedDirectorAgent() {
       ...current,
       characterSelections: setClipCharacterSelection(current.characterSelections, clipId, ids, current.approvedCharacterIds),
       compiledByClip: { ...current.compiledByClip, [clipId]: undefined },
+      shotApprovals: { ...current.shotApprovals, [clipId]: current.shotApprovals[clipId] ? { ...current.shotApprovals[clipId]!, approved: false } : undefined },
     }));
   };
 
@@ -213,6 +256,8 @@ export function ScriptLockedDirectorAgent() {
         mustInclude: "",
         avoid: "",
       });
+      const nextTimeline = materializeScriptLockedTimeline(session.sourceVision, useStore.getState().clips);
+      useStore.setState({ clips: nextTimeline, selectedClipId: nextTimeline[0]?.id ?? null });
       setSession((current) => ({
         ...current,
         compiledByClip: Object.fromEntries(response.shots.map((shot) => [shot.clipId, shot])),
@@ -255,6 +300,91 @@ export function ScriptLockedDirectorAgent() {
         },
       }));
       setEditDrafts((current) => ({ ...current, [shot.clipId]: "" }));
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : String(failure));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const generateShotImage = async (shot: (typeof shots)[number], compiled: ScriptLockedCompiledShot) => {
+    const selectedIds = session.characterSelections[shot.clipId] ?? [];
+    const selectedCharacterUrls = selectedIds.map(referenceUrlForId).filter((url): url is string => Boolean(url));
+    if (selectedIds.length !== selectedCharacterUrls.length) {
+      setError("Every selected character needs a ready approved reference image before shot-image generation.");
+      return;
+    }
+    const continuityShots = shots.map((item) => ({ clipId: item.clipId }));
+    const sameCharacterAnchor = findPriorApprovedContinuityAnchor({
+      currentClipId: shot.clipId,
+      shots: continuityShots,
+      shotApprovals: session.shotApprovals,
+      sceneApprovals: session.sceneApprovals,
+      characterSelections: session.characterSelections,
+    });
+    const projectAnchor = findPriorApprovedProjectAnchor({
+      currentClipId: shot.clipId,
+      shots: continuityShots,
+      shotApprovals: session.shotApprovals,
+      sceneApprovals: session.sceneApprovals,
+    });
+    const referenceUrls = buildScriptLockedImageReferenceUrls({
+      currentImageUrl: session.shotApprovals[shot.clipId]?.url,
+      selectedCharacterUrls,
+      sameCharacterAnchorUrl: sameCharacterAnchor?.url,
+      projectAnchorUrl: projectAnchor?.url,
+    });
+    const prompt = buildAgnesGenerationInstruction({
+      agnesPrompt: compiled.agnesPrompt,
+      continuityConstraints: compiled.continuityConstraints,
+    });
+    setBusy(`image:${shot.clipId}`);
+    setError(null);
+    try {
+      const url = await generateScriptLockedShotImage({ prompt, referenceUrls, name: shot.sourceText });
+      setSession((current) => ({
+        ...current,
+        shotApprovals: { ...current.shotApprovals, [shot.clipId]: { url, approved: false } },
+      }));
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : String(failure));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const approveShotImage = (clipId: string) => {
+    setSession((current) => {
+      const image = current.shotApprovals[clipId];
+      if (!image?.url) return current;
+      return {
+        ...current,
+        shotApprovals: { ...current.shotApprovals, [clipId]: { ...image, approved: true } },
+      };
+    });
+  };
+
+  const generateVideo = async (shot: (typeof shots)[number], compiled: ScriptLockedCompiledShot) => {
+    const prepared = prepareScriptLockedVideoGeneration({
+      clipId: shot.clipId,
+      start: shot.start,
+      end: shot.end,
+      sectionLabel: shot.sourceText.split("\n")[0]?.slice(0, 80) || shot.clipId,
+      agnesPrompt: compiled.agnesPrompt,
+      continuityConstraints: compiled.continuityConstraints,
+      selectedCharacterIds: compiled.selectedCharacterIds,
+      approvedShotImage: session.shotApprovals[shot.clipId],
+    });
+    if (!prepared.ok) {
+      setError(prepared.reason);
+      return;
+    }
+    setBusy(`video:${shot.clipId}`);
+    setError(null);
+    try {
+      const creativeTimeline = materializeScriptLockedTimeline(session.sourceVision, useStore.getState().clips);
+      useStore.setState({ clips: creativeTimeline, selectedClipId: shot.clipId });
+      await queueScriptLockedVideo(prepared.input);
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : String(failure));
     } finally {
@@ -354,13 +484,27 @@ export function ScriptLockedDirectorAgent() {
         {shots.map((shot) => {
           const compiled = session.compiledByClip[shot.clipId];
           const image = session.shotApprovals[shot.clipId];
-          const video = session.sectionApprovals[shot.clipId];
+          const timelineClip = timelineClips.find((clip) => clip.id === shot.clipId);
+          const migratedVideo = session.sectionApprovals[shot.clipId];
+          const videoUrl = timelineClip?.status === "ready" && timelineClip.videoUrl ? timelineClip.videoUrl : migratedVideo?.url;
+          const videoActive = timelineClip?.status === "queued" || timelineClip?.status === "generating";
           return <article key={shot.clipId} style={generateCardStyle}>
             <div style={rowStyle}><strong>{shot.clipId}</strong><span style={tinyStyle}>{compiled ? "Instruction ready" : "Compile first"}</span></div>
-            {image?.url && <img src={image.url} alt={`${shot.clipId} approved shot`} style={previewImageStyle} />}
-            {video?.url && <video src={video.url} controls preload="metadata" style={previewVideoStyle} />}
-            <button type="button" className="btn primary" disabled>Generate</button>
-            <span style={tinyStyle}>Provider handoff is enabled only after the Script-Locked generation gate is verified.</span>
+            {image?.url && <img src={image.url} alt={`${shot.clipId} shot`} style={previewImageStyle} />}
+            {image?.url && <div style={rowStyle}>
+              <span style={tinyStyle}>{image.approved ? "Approved shot image · eligible Agnes seed" : "Review this image before video generation."}</span>
+              <button type="button" className="btn" disabled={image.approved || busy !== null} onClick={() => approveShotImage(shot.clipId)}>{image.approved ? "Shot image approved" : "Approve shot image"}</button>
+            </div>}
+            {videoUrl && <video src={videoUrl} controls preload="metadata" style={previewVideoStyle} />}
+            <div style={generateActionsStyle}>
+              <button type="button" className="btn" disabled={!compiled || busy !== null} onClick={() => compiled && void generateShotImage(shot, compiled)}>
+                {busy === `image:${shot.clipId}` ? "Generating image…" : image?.url ? "Regenerate shot image" : "Generate shot image"}
+              </button>
+              <button type="button" className="btn primary" disabled={!compiled || busy !== null || videoActive} onClick={() => compiled && void generateVideo(shot, compiled)}>
+                {videoActive ? "Video queued…" : videoUrl ? "Regenerate video" : "Generate video"}
+              </button>
+            </div>
+            <span style={tinyStyle}>Provider calls happen only from these explicit buttons. Character-selected video stays blocked until the current shot image is approved.</span>
           </article>;
         })}
       </section>
@@ -395,5 +539,6 @@ const editStyle: CSSProperties = { display: "grid", gridTemplateColumns: "1fr au
 const inputStyle: CSSProperties = { minWidth: 0, padding: 9, borderRadius: 8, border: "1px solid rgba(255,255,255,.14)", background: "#111116", color: "#f4f4f5" };
 const errorStyle: CSSProperties = { marginTop: 10, padding: 10, borderRadius: 9, background: "rgba(239,68,68,.1)", border: "1px solid rgba(239,68,68,.25)", color: "#fecaca", fontSize: 11 };
 const generateCardStyle: CSSProperties = { display: "grid", gap: 8, marginTop: 10, padding: 10, borderRadius: 9, border: "1px solid rgba(255,255,255,.09)" };
+const generateActionsStyle: CSSProperties = { display: "flex", gap: 8, flexWrap: "wrap" };
 const previewImageStyle: CSSProperties = { width: "100%", maxHeight: 220, objectFit: "cover", borderRadius: 8, background: "#000" };
 const previewVideoStyle: CSSProperties = { width: "100%", maxHeight: 240, borderRadius: 8, background: "#000" };
