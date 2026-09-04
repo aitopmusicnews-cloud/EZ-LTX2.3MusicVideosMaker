@@ -31,12 +31,17 @@ const request: ScriptLockedCompileRequest = {
 
 
 test("rejects changed end time", () => {
+  const source = request.shots[0]!;
   const response = {
     compiler: "videodb-scriptlocked-agnes-v1" as const,
     shots: [{
-      ...request.shots[0]!,
+      clipId: source.clipId,
+      start: source.start,
       end: 19,
+      sourceText: source.sourceText,
       agnesPrompt: "Character 1 walks to the window.",
+      selectedCharacterIds: [...source.selectedCharacterIds],
+      selectedReferenceIds: [...source.selectedReferenceIds],
       continuityConstraints: [],
       compilerNotes: [],
     }],
