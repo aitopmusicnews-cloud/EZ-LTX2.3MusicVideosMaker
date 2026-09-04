@@ -1,3 +1,4 @@
+import type { Clip } from "@mvs/shared";
 import { buildVisionTimelineClips } from "./directorAgentVision.js";
 import { parseDirectorVision } from "./directorVisionParser.js";
 
@@ -175,6 +176,55 @@ export function buildScriptLockedShots(
       onScreenText: shot.onScreenText,
       selectedCharacterIds,
       selectedReferenceIds,
+    };
+  });
+}
+
+export function materializeScriptLockedTimeline(vision: string, existingClips: Clip[]): Clip[] {
+  const parsed = parseDirectorVision(vision);
+  if (parsed.mode !== "structured") return existingClips;
+
+  const exactClips = buildVisionTimelineClips(vision, []);
+  if (exactClips.length !== parsed.shots.length) {
+    throw new Error("Script-Locked timeline could not preserve the exact structured Vision shot count.");
+  }
+
+  const existingById = new Map(existingClips.map((clip) => [clip.id, clip]));
+  return exactClips.map((exact) => {
+    const previous = existingById.get(exact.id);
+    const base: Clip = {
+      ...exact,
+      source: "textToVideo",
+      model: "agnes-video-v2.0",
+      status: "empty",
+      prompt: undefined,
+      videoUrl: undefined,
+      thumbnailUrl: undefined,
+      generationTaskId: undefined,
+      lastError: undefined,
+      seedImageUrl: undefined,
+      archetypeUrl: undefined,
+    };
+
+    const canPreserveReadyMedia = previous
+      && previous.start === exact.start
+      && previous.end === exact.end
+      && previous.status === "ready"
+      && Boolean(previous.videoUrl);
+    if (!canPreserveReadyMedia) return base;
+
+    return {
+      ...base,
+      source: previous.source,
+      model: previous.model ?? "agnes-video-v2.0",
+      status: "ready",
+      videoUrl: previous.videoUrl,
+      thumbnailUrl: previous.thumbnailUrl,
+      generationTaskId: previous.generationTaskId,
+      seedImageUrl: previous.seedImageUrl,
+      archetypeUrl: previous.archetypeUrl,
+      // Legacy or assisted prompts are never authoritative in Script-Locked mode.
+      prompt: undefined,
     };
   });
 }
