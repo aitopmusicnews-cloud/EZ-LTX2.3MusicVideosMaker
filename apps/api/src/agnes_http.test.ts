@@ -44,6 +44,22 @@ test("image generation uses Agnes Image 2.5 Flash and preserves the requested ra
   });
 });
 
+test("image generation can explicitly select Agnes Image 2.1 Flash", async () => {
+  let init: RequestInit | undefined;
+  const fetchImpl: typeof fetch = async (_input, requestInit) => {
+    init = requestInit;
+    return jsonResponse({ data: [{ url: "https://cdn.example.com/frame-21.png" }] });
+  };
+
+  await createAgnesImage(
+    { prompt: "detailed character visual", ratio: "16:9", model: "agnes-image-2.1-flash" },
+    "secret",
+    fetchImpl,
+  );
+
+  assert.equal(JSON.parse(String(init?.body)).model, "agnes-image-2.1-flash");
+});
+
 test("ordinary video generation uses free Agnes Video V2.0", async () => {
   let init: RequestInit | undefined;
   const fetchImpl: typeof fetch = async (_input, requestInit) => {
