@@ -1,6 +1,11 @@
 import os
 
 from flask import Flask, jsonify, request
+from pydantic import ValidationError
+
+from scriptlocked.llm import ReasonerUnavailable
+from scriptlocked.models import CompileRequest
+from scriptlocked.service import compile_project
 
 
 def create_app():
@@ -22,7 +27,19 @@ def create_app():
         denied = require_token()
         if denied:
             return denied
-        return jsonify({"error": "invalid_request"}), 400
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            return jsonify({"error": "invalid_request"}), 400
+        try:
+            compile_request = CompileRequest.model_validate(payload)
+            result = compile_project(compile_request)
+            return jsonify(result.model_dump()), 200
+        except ValidationError as error:
+            return jsonify({"error": "invalid_request", "details": error.errors()}), 400
+        except ReasonerUnavailable as error:
+            return jsonify({"error": "reasoner_unavailable", "message": str(error)}), 503
+        except ValueError as error:
+            return jsonify({"error": "fidelity_violation", "message": str(error)}), 422
 
     @app.post("/v1/edit")
     def edit_route():
