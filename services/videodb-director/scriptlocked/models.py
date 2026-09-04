@@ -62,3 +62,34 @@ class AgnesExecutionShot(BaseModel):
 class CompileResponse(BaseModel):
     compiler: Literal["videodb-scriptlocked-agnes-v1"] = "videodb-scriptlocked-agnes-v1"
     shots: list[AgnesExecutionShot]
+
+
+class EditRequest(BaseModel):
+    projectId: str
+    target: Literal["agnes_instruction"]
+    clipId: str
+    start: float
+    end: float
+    sourceText: str
+    currentAgnesPrompt: str
+    selectedCharacterIds: list[str] = Field(default_factory=list)
+    selectedReferenceIds: list[str] = Field(default_factory=list)
+    continuityConstraints: list[str] = Field(default_factory=list)
+    userMessage: str
+
+    @model_validator(mode="after")
+    def valid_edit_range(self):
+        if self.end <= self.start:
+            raise ValueError("end must be after start")
+        if not self.userMessage.strip():
+            raise ValueError("userMessage is required")
+        return self
+
+
+class EditResponse(BaseModel):
+    clipId: str
+    start: float
+    end: float
+    sourceText: str
+    agnesPrompt: str
+    compilerNotes: list[str] = Field(default_factory=list)
