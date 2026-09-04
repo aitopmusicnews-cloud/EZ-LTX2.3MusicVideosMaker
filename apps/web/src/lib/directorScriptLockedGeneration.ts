@@ -1,9 +1,28 @@
 import { chooseApprovedShotSeed } from "./directorCharacterMedia.js";
 
 export type ScriptLockedImageProvider = "current" | "agnes";
+export const SCRIPT_LOCKED_IMAGE_PROVIDER_KEY = "mvs-scriptlocked-image-provider-v1";
+
+type ImageProviderStorage = { getItem(key: string): string | null };
 
 export function imageModelForScriptLockedProvider(provider: ScriptLockedImageProvider): string {
   return provider === "agnes" ? "agnes-image-2.1-flash" : "openrouter_image_flash";
+}
+
+export function storedScriptLockedImageProvider(storage?: ImageProviderStorage | null): ScriptLockedImageProvider {
+  let source = storage;
+  if (source === undefined) {
+    try {
+      source = typeof localStorage === "undefined" ? null : localStorage;
+    } catch {
+      source = null;
+    }
+  }
+  try {
+    return source?.getItem(SCRIPT_LOCKED_IMAGE_PROVIDER_KEY) === "agnes" ? "agnes" : "current";
+  } catch {
+    return "current";
+  }
 }
 
 export type ScriptLockedVideoGenerationInput = {
@@ -127,7 +146,8 @@ export async function generateScriptLockedShotImage(input: {
   if (!prompt) throw new Error("Compile an Agnes instruction before generating a shot image.");
   const { startTextToImage, pollTask, saveImageToLibrary } = await import("./api.js");
   const referenceImages = uniqueUrls(input.referenceUrls).map((uri) => ({ uri }));
-  const model = imageModelForScriptLockedProvider(input.provider ?? "current");
+  const provider = input.provider ?? storedScriptLockedImageProvider();
+  const model = imageModelForScriptLockedProvider(provider);
   const { id } = await startTextToImage({
     prompt,
     promptText: prompt,
