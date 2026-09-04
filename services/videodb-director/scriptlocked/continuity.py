@@ -1,3 +1,4 @@
+from .fidelity import sanitize_reference_description
 from .models import ScriptLockedReference, ScriptLockedShot
 
 
@@ -23,7 +24,7 @@ def build_continuity_constraints(
         reference = by_id.get(reference_id)
         if reference is None or reference.kind not in {"shot", "note", "location", "style"}:
             continue
-        description = reference.description.strip()
+        description = sanitize_reference_description(shot, reference, references)
         if description:
             constraints.append(
                 f"Preserve the approved continuity facts from {reference.name} / {reference.id}: {description}."
