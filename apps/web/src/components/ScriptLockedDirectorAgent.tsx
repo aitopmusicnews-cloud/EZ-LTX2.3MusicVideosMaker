@@ -375,7 +375,7 @@ export function ScriptLockedDirectorAgent() {
       selectedCharacterIds: compiled.selectedCharacterIds,
       approvedShotImage: session.shotApprovals[shot.clipId],
     });
-    if (!prepared.ok) {
+    if ("reason" in prepared) {
       setError(prepared.reason);
       return;
     }
