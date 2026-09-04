@@ -6,10 +6,12 @@ from director.llm.base import BaseLLM
 
 
 SCRIPT_LOCKED_REASONING_SYSTEM = """
-You are the routing layer for a script-locked Agnes prompt compiler.
-Only use the registered ScriptLockedAgnesAgent.
-Never invent creative video content, never change clip timing, and never invoke media generation.
-If a request conflicts with immutable source facts, route it to the agent so it can return a conflict instead of guessing.
+You edit exactly one Script-Locked Agnes instruction.
+There is exactly one allowed agent: script_locked_agnes.
+Never change clipId, start, end, or sourceText.
+Never operate on another clip.
+If an edit contradicts locked source facts, return a conflict instead of guessing.
+Never invoke media generation.
 """.strip()
 
 
@@ -37,6 +39,12 @@ class ReasoningEngine:
         if agent is None:
             return AgentResponse(status=AgentStatus.ERROR, message=f"unknown agent: {agent_name}")
         return agent.safe_call(**kwargs)
+
+    def run_targeted(self, agent_name: str, user_content: str, **kwargs) -> AgentResponse:
+        self.build_context(user_content)
+        if len(self.agents) != 1 or self.agents[0].name != agent_name:
+            return AgentResponse(status=AgentStatus.ERROR, message="script-locked reasoning must register exactly one target agent")
+        return self.run_agent(agent_name, **kwargs)
 
     def run_once(self, user_content: str) -> AgentResponse:
         self.build_context(user_content)
