@@ -6,7 +6,7 @@ from director.llm.base import BaseLLM
 
 from .fidelity import allowed_facts_text, validate_no_generic_additions, validate_selected_references
 from .llm import ReasonerUnavailable
-from .models import ScriptLockedReference, ScriptLockedShot
+from .models import EditRequest, ScriptLockedReference, ScriptLockedShot
 
 
 SCRIPT_LOCKED_SYSTEM = """
@@ -18,20 +18,28 @@ Never add generic cinematic filler unless the user wrote it.
 Return only the compiled Agnes prompt text.
 """.strip()
 
+EDIT_SYSTEM = """
+You edit exactly one existing Agnes instruction for one immutable timecoded shot.
+Keep clip timing and source facts unchanged.
+Apply only the user's requested instruction change when it does not contradict the locked source.
+Do not add unrelated creative content and do not operate on any other shot.
+Return only the revised Agnes prompt text.
+""".strip()
+
 
 class ScriptLockedAgnesAgent(BaseAgent):
     agent_name = "script_locked_agnes"
-    description = "Compile one immutable timecoded shot into a precise Agnes execution prompt without creative reinterpretation."
+    description = "Compile or edit one immutable timecoded shot into a precise Agnes instruction without creative reinterpretation."
     parameters = {
         "type": "object",
         "properties": {
+            "editRequest": {"type": "object"},
             "shot": {"type": "object"},
             "references": {"type": "array", "items": {"type": "object"}},
             "mustInclude": {"type": "string"},
             "avoid": {"type": "string"},
             "continuityConstraints": {"type": "array", "items": {"type": "string"}},
         },
-        "required": ["shot", "references"],
     }
 
     def __init__(self, session, llm: BaseLLM):
@@ -82,19 +90,57 @@ class ScriptLockedAgnesAgent(BaseAgent):
         validate_no_generic_additions(prompt, allowed_text)
         return prompt
 
+    def edit_prompt(self, edit_request: EditRequest) -> str:
+        payload = {
+            "task": "Edit only this Agnes instruction.",
+            "clipId": edit_request.clipId,
+            "start": edit_request.start,
+            "end": edit_request.end,
+            "sourceText": edit_request.sourceText,
+            "currentAgnesPrompt": edit_request.currentAgnesPrompt,
+            "selectedCharacterIds": edit_request.selectedCharacterIds,
+            "selectedReferenceIds": edit_request.selectedReferenceIds,
+            "continuityConstraints": edit_request.continuityConstraints,
+            "userMessage": edit_request.userMessage,
+        }
+        response = self.llm.chat_completions(
+            messages=[
+                ContextMessage(content=EDIT_SYSTEM, role=RoleTypes.system).to_llm_msg(),
+                ContextMessage(content=json.dumps(payload, ensure_ascii=False), role=RoleTypes.user).to_llm_msg(),
+            ],
+            tools=[],
+        )
+        if not response.status:
+            raise ReasonerUnavailable(response.content or "reasoning unavailable")
+        prompt = response.content.strip()
+        allowed = "\n".join([
+            edit_request.sourceText,
+            edit_request.currentAgnesPrompt,
+            edit_request.userMessage,
+            *edit_request.continuityConstraints,
+        ])
+        validate_no_generic_additions(prompt, allowed)
+        return prompt
+
     def run(
         self,
-        shot: dict,
-        references: list[dict],
+        editRequest: dict | None = None,
+        shot: dict | None = None,
+        references: list[dict] | None = None,
         mustInclude: str = "",
         avoid: str = "",
         continuityConstraints: list[str] | None = None,
         **kwargs,
     ) -> AgentResponse:
         try:
+            if editRequest is not None:
+                edited = self.edit_prompt(EditRequest.model_validate(editRequest))
+                return AgentResponse(status=AgentStatus.SUCCESS, data={"agnesPrompt": edited})
+            if shot is None:
+                raise ValueError("shot is required")
             compiled = self.compile_prompt(
                 ScriptLockedShot.model_validate(shot),
-                [ScriptLockedReference.model_validate(reference) for reference in references],
+                [ScriptLockedReference.model_validate(reference) for reference in (references or [])],
                 mustInclude,
                 avoid,
                 continuityConstraints or [],
