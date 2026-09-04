@@ -10,11 +10,23 @@ const optionalNonEmpty = z
   .transform((value) => (value.trim() === "" ? undefined : value.trim()))
   .pipe(z.string().min(1).optional());
 
+const envBoolean = z.preprocess((value) => {
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === "true") return true;
+    if (normalized === "false" || normalized === "") return false;
+  }
+  return value;
+}, z.boolean());
+
 const Env = z.object({
   LOCAL_INFERENCE_URL: optionalUrl.optional(),
   AGNES_API_KEY: optionalNonEmpty.optional(),
   GEMINI_API_KEY: optionalNonEmpty.optional(),
   GEMINI_DIRECTOR_MODEL: z.string().trim().min(1).default("gemini-3.6-flash"),
+  DIRECTOR_REASONING_URL: optionalUrl.optional(),
+  DIRECTOR_REASONING_TOKEN: optionalNonEmpty.optional(),
+  DIRECTOR_SCRIPTLOCKED_ENABLED: envBoolean.default(false),
   API_AUTH_TOKEN: optionalNonEmpty.optional(),
   PORT: z.coerce.number().default(3001),
   PUBLIC_BASE_URL: optionalUrl.optional(),
@@ -75,7 +87,10 @@ if (!config.AGNES_API_KEY) {
   console.log("INFO: AGNES_API_KEY is missing. Agnes media generation is offline.");
 }
 if (!config.GEMINI_API_KEY) {
-  console.log("INFO: GEMINI_API_KEY is missing. The Agnes Director Agent is offline and will not use a fallback planner.");
+  console.log("INFO: GEMINI_API_KEY is missing. The legacy Agnes Director Agent is offline.");
+}
+if (config.DIRECTOR_SCRIPTLOCKED_ENABLED && (!config.DIRECTOR_REASONING_URL || !config.DIRECTOR_REASONING_TOKEN)) {
+  console.log("INFO: Script-Locked Director is enabled without a complete reasoning service configuration; compile will use the literal fallback and edits will remain unavailable.");
 }
 
 export type Config = typeof config;

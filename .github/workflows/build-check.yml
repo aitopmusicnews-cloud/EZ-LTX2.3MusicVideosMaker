@@ -2,17 +2,27 @@ name: Build Check
 
 on:
   push:
-    branches: [main, backup-pre-rollback-1890d80, feature/director-vision-first-clips, fix/director-no-silent-fallback, feature/director-editable-clip-count, fix/gemini-director-capacity-retry, fix/director-local-fallback, fix/director-chat-quota-fallback, feature/director-asset-chat-multichar, fix/director-script-lock, fix/director-character-identity-lock, fix/director-strict-continuity-lock]
+    branches: [main, backup-pre-rollback-1890d80, feature/director-vision-first-clips, fix/director-no-silent-fallback, feature/director-editable-clip-count, fix/gemini-director-capacity-retry, fix/director-local-fallback, fix/director-chat-quota-fallback, feature/director-asset-chat-multichar, fix/director-script-lock, fix/director-character-identity-lock, fix/director-strict-continuity-lock, feature/videodb-scriptlocked-director]
   pull_request:
     branches: [main, backup-pre-rollback-1890d80]
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+      - name: Use Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: services/videodb-director/requirements.txt
+      - name: Install Script-Locked Director dependencies
+        run: python -m pip install -r services/videodb-director/requirements.txt
+      - name: Script-Locked Director Python tests
+        run: cd services/videodb-director && python -m pytest tests -q
       - name: Use Node 22
         uses: actions/setup-node@v4
         with:
@@ -21,6 +31,6 @@ jobs:
       - name: Install dependencies
         run: npm ci
       - name: Director regression tests
-        run: node apps/web/scripts/clip-count-prebuild.mjs && npx tsx --test apps/web/src/lib/directorVisionParser.test.ts apps/web/src/lib/directorAgentVision.test.ts apps/web/src/lib/directorPlan.test.ts apps/web/src/lib/directorGeneration.test.ts apps/web/src/lib/directorCharacterState.test.ts apps/web/src/lib/directorCharacterMedia.test.ts apps/web/src/lib/directorContinuityLock.test.ts apps/web/src/lib/directorChatClient.test.ts apps/web/src/components/AutoDirector.vision-first.test.ts apps/web/src/components/LtxDirectorAgent.vision-first.test.ts apps/web/src/components/LtxDirectorAgent.multichar.test.ts apps/web/src/components/DirectorAssetEditing.test.ts apps/api/src/director_agent.retry.test.ts apps/api/src/director_local_plan.test.ts apps/api/src/director_chat_local.test.ts
+        run: node apps/web/scripts/clip-count-prebuild.mjs && npx tsx --test apps/web/src/lib/directorVisionParser.test.ts apps/web/src/lib/directorAgentVision.test.ts apps/web/src/lib/directorPlan.test.ts apps/web/src/lib/directorGeneration.test.ts apps/web/src/lib/directorCharacterState.test.ts apps/web/src/lib/directorCharacterMedia.test.ts apps/web/src/lib/directorContinuityLock.test.ts apps/web/src/lib/directorChatClient.test.ts apps/web/src/lib/directorScriptLocked.test.ts apps/web/src/lib/directorScriptLockedGeneration.test.ts apps/web/src/components/AutoDirector.vision-first.test.ts apps/web/src/components/LtxDirectorAgent.vision-first.test.ts apps/web/src/components/LtxDirectorAgent.multichar.test.ts apps/web/src/components/DirectorAssetEditing.test.ts apps/web/src/components/ScriptLockedDirectorAgent.test.ts apps/web/src/components/ScriptLockedDirectorLauncher.test.ts apps/api/src/director_agent.retry.test.ts apps/api/src/director_local_plan.test.ts apps/api/src/director_chat_local.test.ts apps/api/src/director_scriptlocked.test.ts
       - name: Build workspaces
         run: npm run build
