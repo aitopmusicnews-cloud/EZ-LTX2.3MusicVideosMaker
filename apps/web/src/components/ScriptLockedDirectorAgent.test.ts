@@ -36,3 +36,11 @@ test("media credits are spent only by explicit Script-Locked buttons", () => {
   assert.match(source, /queueScriptLockedVideo/);
   assert.match(source, /prepareScriptLockedVideoGeneration/);
 });
+
+
+test("Director exposes Agnes Text-to-Image 2.1 as an explicit image provider option", () => {
+  assert.match(source, /Image provider/i);
+  assert.match(source, /Current image route/i);
+  assert.match(source, /Agnes Text-to-Image/i);
+  assert.match(source, /agnes-image-2\.1-flash/);
+});
