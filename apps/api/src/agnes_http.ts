@@ -71,7 +71,7 @@ function headers(apiKey: string): Record<string, string> {
 }
 
 export async function createAgnesImage(
-  input: { prompt: string; ratio: string; referenceImages?: string[] },
+  input: { prompt: string; ratio: string; referenceImages?: string[]; model?: "agnes-image-2.1-flash" },
   apiKey: string,
   fetchImpl: FetchLike = fetch,
 ): Promise<string> {
@@ -79,7 +79,7 @@ export async function createAgnesImage(
     method: "POST",
     headers: headers(apiKey),
     body: JSON.stringify({
-      model: AGNES_IMAGE_MODEL,
+      model: input.model ?? AGNES_IMAGE_MODEL,
       prompt: input.prompt,
       size: "2K",
       ratio: ratioFromLegacyValue(input.ratio),

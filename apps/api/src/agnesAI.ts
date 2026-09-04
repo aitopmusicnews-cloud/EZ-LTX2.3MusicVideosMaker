@@ -117,9 +117,11 @@ export async function generateCharacterFrame(req: TextToImageRequest): Promise<G
   await writeJobToDisk(id, { status: "pending", prompt, progress: 0, createdAt: now, updatedAt: now });
   try {
     const referenceImages = await Promise.all(referenceUris(req).slice(0, 5).map(providerMediaUrl));
+    const requestedModel = req.model === "agnes-image-2.1-flash" ? req.model : undefined;
     const imageUrl = await createAgnesImage({
       prompt,
       ratio: ratioFromLegacyValue(req.ratio),
+      ...(requestedModel ? { model: requestedModel } : {}),
       ...(referenceImages.length ? { referenceImages } : {}),
     }, apiKey());
     await writeJobToDisk(id, { status: "completed", prompt, image_url: imageUrl, progress: 100, createdAt: now, updatedAt: Date.now() });

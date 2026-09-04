@@ -1,8 +1,15 @@
 export function patchLeftRailTools(source, replaceRequired) {
-  if (source.includes('mvs-open-ltx-director') && source.includes('mvs-open-promo-cut')) return source;
+  const providerKey = "mvs-scriptlocked-image-provider-v1";
+  const providerControl = `            <label style={{ display: "grid", gap: 5, fontSize: 11 }}>\n              <span className="label">Image provider</span>\n              <select\n                aria-label="Image provider"\n                defaultValue={(() => { try { return localStorage.getItem("${providerKey}") === "agnes" ? "agnes" : "current"; } catch { return "current"; } })()}\n                onChange={(event) => { try { localStorage.setItem("${providerKey}", event.target.value); } catch {} }}\n                style={{ width: "100%", padding: "7px 8px", borderRadius: 8, border: "1px solid rgba(255,255,255,.14)", background: "#111116", color: "inherit" }}\n              >\n                <option value="current">Current image route</option>\n                <option value="agnes">Agnes Text-to-Image · agnes-image-2.1-flash</option>\n              </select>\n            </label>`;
+  const helpLine = `          <div className="rail-help">Open creative tools here without covering the timeline.</div>`;
+
+  if (source.includes('mvs-open-ltx-director') && source.includes('mvs-open-promo-cut')) {
+    if (source.includes(providerKey)) return source;
+    return replaceRequired(source, helpLine, `${providerControl}\n${helpLine}`, "left-rail Script-Locked image provider");
+  }
 
   const referenceSection = `      <div className="section">\n        <div className="section-header">\n          <span className="label">Reference images</span>`;
-  const toolsSection = `      {analysis && (\n        <div className="section">\n          <div className="section-header">\n            <span className="label">Tools</span>\n          </div>\n          <div style={{ display: "grid", gap: 8 }}>\n            <button type="button" className="btn ghost w-full" onClick={() => window.dispatchEvent(new CustomEvent("mvs-open-ltx-director"))}>✦ Director</button>\n            <button type="button" className="btn ghost w-full" onClick={() => window.dispatchEvent(new CustomEvent("mvs-open-reference-chat"))}>＋ References</button>\n            <button type="button" className="btn ghost w-full" onClick={() => window.dispatchEvent(new CustomEvent("mvs-open-promo-cut"))}>✂ Promo Cut</button>\n          </div>\n          <div className="rail-help">Open creative tools here without covering the timeline.</div>\n        </div>\n      )}\n\n${referenceSection}`;
+  const toolsSection = `      {analysis && (\n        <div className="section">\n          <div className="section-header">\n            <span className="label">Tools</span>\n          </div>\n          <div style={{ display: "grid", gap: 8 }}>\n            <button type="button" className="btn ghost w-full" onClick={() => window.dispatchEvent(new CustomEvent("mvs-open-ltx-director"))}>✦ Director</button>\n            <button type="button" className="btn ghost w-full" onClick={() => window.dispatchEvent(new CustomEvent("mvs-open-reference-chat"))}>＋ References</button>\n            <button type="button" className="btn ghost w-full" onClick={() => window.dispatchEvent(new CustomEvent("mvs-open-promo-cut"))}>✂ Promo Cut</button>\n          </div>\n${providerControl}\n${helpLine}\n        </div>\n      )}\n\n${referenceSection}`;
 
   return replaceRequired(source, referenceSection, toolsSection, "left-rail Director tools");
 }

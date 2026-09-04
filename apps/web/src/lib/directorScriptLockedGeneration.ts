@@ -1,5 +1,30 @@
 import { chooseApprovedShotSeed } from "./directorCharacterMedia.js";
 
+export type ScriptLockedImageProvider = "current" | "agnes";
+export const SCRIPT_LOCKED_IMAGE_PROVIDER_KEY = "mvs-scriptlocked-image-provider-v1";
+
+type ImageProviderStorage = { getItem(key: string): string | null };
+
+export function imageModelForScriptLockedProvider(provider: ScriptLockedImageProvider): string {
+  return provider === "agnes" ? "agnes-image-2.1-flash" : "openrouter_image_flash";
+}
+
+export function storedScriptLockedImageProvider(storage?: ImageProviderStorage | null): ScriptLockedImageProvider {
+  let source = storage;
+  if (source === undefined) {
+    try {
+      source = typeof localStorage === "undefined" ? null : localStorage;
+    } catch {
+      source = null;
+    }
+  }
+  try {
+    return source?.getItem(SCRIPT_LOCKED_IMAGE_PROVIDER_KEY) === "agnes" ? "agnes" : "current";
+  } catch {
+    return "current";
+  }
+}
+
 export type ScriptLockedVideoGenerationInput = {
   clipId: string;
   source: "textToVideo" | "imageToVideo";
@@ -115,15 +140,18 @@ export async function generateScriptLockedShotImage(input: {
   prompt: string;
   referenceUrls: string[];
   name?: string;
+  provider?: ScriptLockedImageProvider;
 }): Promise<string> {
   const prompt = input.prompt.trim();
   if (!prompt) throw new Error("Compile an Agnes instruction before generating a shot image.");
   const { startTextToImage, pollTask, saveImageToLibrary } = await import("./api.js");
   const referenceImages = uniqueUrls(input.referenceUrls).map((uri) => ({ uri }));
+  const provider = input.provider ?? storedScriptLockedImageProvider();
+  const model = imageModelForScriptLockedProvider(provider);
   const { id } = await startTextToImage({
     prompt,
     promptText: prompt,
-    model: "openrouter_image_flash",
+    model,
     ratio: "1920:1080",
     ...(referenceImages.length ? { referenceImages } : {}),
   });
@@ -138,7 +166,7 @@ export async function generateScriptLockedShotImage(input: {
     url,
     source: "generated",
     prompt,
-    model: "openrouter_image_flash",
+    model,
   }).catch((error) => console.warn("Script-Locked shot image library save failed", error));
   return url;
 }
