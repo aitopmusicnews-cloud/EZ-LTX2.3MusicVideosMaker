@@ -17,6 +17,18 @@ test("timecoded Vision yields exact source shots", () => {
 });
 
 
+test("Script-Locked clip IDs exactly match structured Vision timeline materialization", () => {
+  const shots = buildScriptLockedShots(
+    `00:12–00:18\nShot 1: Character 1 walks to the window.\n00:18–00:23\nShot 2: Character 2 remains at the piano.`,
+    {},
+  );
+  assert.deepEqual(shots.map((shot) => shot.clipId), [
+    "vision-shot-1-120-180",
+    "vision-shot-2-180-230",
+  ]);
+});
+
+
 test("migration retains approved media but never legacy generic prompt", () => {
   const migrated = migrateLegacyDirectorAssets({
     shotApprovals: { "vision-shot-1": { url: "/old.png", approved: true } },
