@@ -7,6 +7,7 @@ import {
   buildScriptLockedVideoSegmentInputs,
   imageModelForScriptLockedProvider,
   prepareScriptLockedVideoGeneration,
+  storedScriptLockedImageProvider,
 } from "./directorScriptLockedGeneration.js";
 
 
@@ -48,6 +49,14 @@ test("image reference order is target then selected characters then continuity a
 test("Script-Locked image provider maps the new Agnes option to Image 2.1", () => {
   assert.equal(imageModelForScriptLockedProvider("current"), "openrouter_image_flash");
   assert.equal(imageModelForScriptLockedProvider("agnes"), "agnes-image-2.1-flash");
+});
+
+
+test("stored Script-Locked image provider honors Agnes and safely defaults to the current route", () => {
+  assert.equal(storedScriptLockedImageProvider({ getItem: () => "agnes" }), "agnes");
+  assert.equal(storedScriptLockedImageProvider({ getItem: () => "current" }), "current");
+  assert.equal(storedScriptLockedImageProvider({ getItem: () => "unexpected" }), "current");
+  assert.equal(storedScriptLockedImageProvider(null), "current");
 });
 
 
